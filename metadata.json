@@ -1,0 +1,6 @@
+{
+  "name": "My Story",
+  "description": "A silent vault for journaling, memory processing, and book synthesis using AI.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
