@@ -49,5 +49,74 @@ sudo systemctl start mystory.service
 Open your browser on your phone or laptop connected to your Tailscale network and navigate to:
 `http://<YOUR_MINIPC_TAILSCALE_IP>:3000`
 
-### 5. API Keys
-Once the app is open, navigate to the **Settings** tab. Input your Google, NVIDIA, and Mistral keys there. They will be saved securely to `config.json` inside this directory.
+**Set a passcode, and bind to the tailnet.** Do both.
+
+Open **Settings → The lock** and set a passcode the first time you load the app;
+until you do, anyone who can reach the port can read every entry, and the boot
+log will keep saying so.
+
+By default the server also listens on every interface, so on a MiniPC that is
+also on your home Wi-Fi the vault answers to anything on the LAN. Add the
+Tailscale address to the service so it publishes there and nowhere else:
+
+```
+Environment="HOST=<YOUR_MINIPC_TAILSCALE_IP>"
+```
+
+Put that line beside the other `Environment=` line in the unit file above, then
+`sudo systemctl daemon-reload && sudo systemctl restart mystory`.
+
+### 5. Back up the vault
+Your entries live in `vault/` inside the project folder — plain markdown plus
+the original recordings. That folder is the only irreplaceable thing on this
+machine. A nightly copy to another disk is enough:
+
+```bash
+(crontab -l 2>/dev/null; echo "30 3 * * * cp -a $(pwd)/vault /path/to/backup/mystory-$(date +\%F)") | crontab -
+```
+
+Set `Environment="VAULT_DIR=/path/to/somewhere"` in the service file to keep the
+vault outside the project folder.
+
+### 6. Your phone
+
+Recording needs the microphone, and no browser will grant it on a plain
+`http://` address that is not localhost. Over Tailscale you get a real
+certificate for free, which is the whole fix:
+
+```bash
+sudo tailscale cert "$(tailscale status --json | sed -n 's/.*"DNSName":"\([^"]*\)\..*/\1/p' | head -1).$(tailscale status --json | sed -n 's/.*"MagicDNSSuffix":"\([^"]*\)".*/\1/p')"
+```
+
+If that is fiddly, `tailscale status` prints the machine's full name and you
+can pass it to `tailscale cert` by hand. Then publish the app on it:
+
+```bash
+sudo tailscale serve --bg 3000
+```
+
+`tailscale serve` puts the app behind your tailnet's HTTPS hostname —
+something like `https://minipc.tailnet-name.ts.net`. Open that on the phone
+and the microphone works.
+
+Then **Share → Add to Home Screen**. It gets its own icon, opens full screen
+with no address bar, and behaves like an app.
+
+Nothing is published to the internet by any of this: the hostname resolves only
+for devices signed into your tailnet. This is also the redirect origin to
+register with Google if you want Drive archiving from the phone — Google
+accepts an https hostname, and will not accept a bare Tailscale IP.
+
+While you are here, bind the app to the tailnet as well, so it is not also
+answering on your home Wi-Fi. Add this beside the other `Environment=` line in
+the unit file, using the address `tailscale ip -4` prints:
+
+```
+Environment="HOST=100.x.y.z"
+```
+
+### 7. API Keys
+Once the app is open, navigate to the **Settings** tab. Input your Gemini, Groq,
+Mistral, NVIDIA, and Cerebras keys there. They are written to the `.env` file
+inside this directory, owner-readable only, and are never sent anywhere except
+to the provider they belong to.
