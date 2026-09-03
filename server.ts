@@ -4,57 +4,73 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { createServer as createViteServer } from 'vite';
 import fs from 'fs/promises';
-import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import multer from 'multer';
+import {
+  ensureVault,
+  listEntries,
+  readEntry,
+  saveEntry,
+  trashEntry,
+  saveAudio,
+  findAudio,
+  newId,
+  isValidId,
+  VAULT_DIR,
+  KEEP_AUDIO,
+} from './vault.ts';
+import {
+  SESSION_COOKIE,
+  hashPasscode,
+  verifyPasscode,
+  signSession,
+  verifySession,
+  newSecret,
+  parseCookies,
+  sessionCookie,
+  clearCookie,
+  throttled,
+  recordFailure,
+  recordSuccess,
+} from './auth.ts';
+
+import {
+  CONFIG_KEYS,
+  SECRET_KEYS,
+  PASSCODE_KEY,
+  SECRET_KEY,
+  loadConfig,
+  saveConfig,
+  setEnvKey,
+} from './env.ts';
+import * as google from './google.ts';
+import { NotConnected } from './google.ts';
+import {
+  chat,
+  transcribe,
+  probe,
+  readRouting,
+  isLocalOnly,
+  synthesisChoices,
+  slotsFor,
+  TASKS,
+  type Task,
+} from './providers.ts';
+import { buildPrompt, normalise, loadTerms, CATEGORIES } from './vocabulary.ts';
 
 dotenv.config();
 
-const PORT = 3000;
-const ENV_PATH = path.join(process.cwd(), '.env');
+const PORT = Number(process.env.PORT) || 3000;
+// 0.0.0.0 means every interface, which on a machine that is also on your home
+// LAN is more than the tailnet. Set HOST to the Tailscale address to publish
+// there and nowhere else.
+const HOST = process.env.HOST || '0.0.0.0';
 
-// Helper to load config safely
-async function loadConfig() {
-  const config: any = {};
-  try {
-    const data = await fs.readFile(ENV_PATH, 'utf-8');
-    data.split('\n').forEach(line => {
-      const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)?\s*$/);
-      if (match) {
-        let key = match[1];
-        let val = match[2] || '';
-        val = val.trim();
-        if (val.startsWith('"') && val.endsWith('"')) {
-          val = val.slice(1, -1);
-        } else if (val.startsWith("'") && val.endsWith("'")) {
-          val = val.slice(1, -1);
-        }
-        config[key] = val;
-      }
-    });
-  } catch (e) {
-    // Ignore if file doesn't exist
-  }
-  
-  const merged = { ...config };
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value) {
-      merged[key] = value;
-    }
-  }
-  return merged;
-}
-
-async function saveConfig(newConfig: any) {
-  const current = await loadConfig();
-  const merged = { ...current, ...newConfig };
-  let envContent = '';
-  for (const [key, value] of Object.entries(merged)) {
-    if (value !== undefined && value !== null && typeof value === 'string') {
-       envContent += `${key}="${value.replace(/"/g, '\\"')}"\n`;
-    }
-  }
-  await fs.writeFile(ENV_PATH, envContent);
+/** The redirect Google will send the consent response back to. Google only
+ *  accepts https origins or localhost, so on a headless box this is normally
+ *  left at the default and the account is linked once from that machine. */
+function redirectUri(req: any): string {
+  return process.env.GOOGLE_REDIRECT_URI || `${req.protocol}://${req.get('host')}/auth/callback`;
 }
 
 // Fetch Google Drive / Docs content
@@ -98,625 +114,448 @@ async function fetchFileContent(accessToken: string, fileId: string, mimeType: s
   }
 }
 
-async function generateContentWithFallback(ai: GoogleGenAI, params: { model: string; contents: any; config?: any }): Promise<any> {
-  const primaryModel = params.model;
-  try {
-    return await ai.models.generateContent(params);
-  } catch (err: any) {
-    console.warn(`Gemini call failed with model ${primaryModel}:`, err.message || err);
-    if (primaryModel === 'gemini-3.5-flash') {
-      console.info("Attempting fallback to 'gemini-2.5-flash'...");
-      try {
-        const fallbackParams = { ...params, model: 'gemini-2.5-flash' };
-        return await ai.models.generateContent(fallbackParams);
-      } catch (fallbackErr: any) {
-        console.error("Fallback to 'gemini-2.5-flash' also failed:", fallbackErr.message || fallbackErr);
-        throw err;
-      }
-    }
-    throw err;
-  }
-}
-
-async function generateGemma4Content(ai: GoogleGenAI, contents: any, config?: any): Promise<any> {
-  const modelCandidates = ['gemma-4-26b-it', 'gemma-4-26b', 'gemma-4-31b-it', 'gemma-4-31b'];
-  let lastError: any = null;
-  for (const model of modelCandidates) {
-    try {
-      console.info(`Attempting Gemma 4 call with model ${model}...`);
-      return await ai.models.generateContent({
-        model,
-        contents,
-        config: config?.config || config
-      });
-    } catch (err: any) {
-      console.warn(`Gemma 4 call failed for ${model}:`, err.message || err);
-      lastError = err;
-    }
-  }
-  console.warn("All Gemma 4 candidate models failed, falling back to gemini-2.5-flash...");
-  try {
-    return await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents,
-      config: config?.config || config
-    });
-  } catch (err: any) {
-    console.error("Gemini 2.5 Flash fallback also failed:", err.message || err);
-    throw lastError || err;
-  }
-}
-
-async function analyzeTagsWithFallback(config: any, prompt: string): Promise<string> {
-  // 1. Mistral API mistral-small-2506 / mistral-small-latest
-  if (config.MISTRAL_API_KEY) {
-    const mistralModels = ["mistral-small-2506", "mistral-small-latest"];
-    for (const model of mistralModels) {
-      try {
-        console.info(`[Auto-Routing Tag Analysis] Trying Mistral with ${model}...`);
-        const resp = await fetch("https://api.mistral.ai/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${config.MISTRAL_API_KEY}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            model: model,
-            messages: [{ role: "user", content: prompt }],
-            temperature: 0.1,
-            response_format: { type: "json_object" }
-          })
-        });
-        if (resp.status === 200) {
-          const data: any = await resp.json();
-          if (data.choices && data.choices[0] && data.choices[0].message?.content) {
-            console.info(`[Auto-Routing Tag Analysis] Success with Mistral ${model}`);
-            return data.choices[0].message.content;
-          }
-        } else {
-          console.warn(`[Auto-Routing Tag Analysis] Mistral ${model} returned status ${resp.status}`);
-        }
-      } catch (err: any) {
-        console.warn(`[Auto-Routing Tag Analysis] Mistral ${model} failed:`, err.message || err);
-      }
-    }
-  }
-
-  // 2. Groq API llama-3.1-8b-instant
-  if (config.GROQ_API_KEY) {
-    try {
-      console.info(`[Auto-Routing Tag Analysis] Trying Groq with llama-3.1-8b-instant...`);
-      const resp = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${config.GROQ_API_KEY}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model: "llama-3.1-8b-instant",
-          messages: [{ role: "user", content: prompt }],
-          temperature: 0.1,
-          response_format: { type: "json_object" }
-        })
-      });
-      if (resp.status === 200) {
-        const data: any = await resp.json();
-        if (data.choices && data.choices[0] && data.choices[0].message?.content) {
-          console.info(`[Auto-Routing Tag Analysis] Success with Groq llama-3.1-8b-instant`);
-          return data.choices[0].message.content;
-        }
-      } else {
-        console.warn(`[Auto-Routing Tag Analysis] Groq llama-3.1-8b-instant returned status ${resp.status}`);
-      }
-    } catch (err: any) {
-      console.warn(`[Auto-Routing Tag Analysis] Groq llama-3.1-8b-instant failed:`, err.message || err);
-    }
-  }
-
-  // 3. Mistral API ministral-14b-2512 / ministral-14b-latest
-  if (config.MISTRAL_API_KEY) {
-    const ministralModels = ["ministral-14b-2512", "ministral-14b-latest"];
-    for (const model of ministralModels) {
-      try {
-        console.info(`[Auto-Routing Tag Analysis] Trying Mistral with ${model}...`);
-        const resp = await fetch("https://api.mistral.ai/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${config.MISTRAL_API_KEY}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            model: model,
-            messages: [{ role: "user", content: prompt }],
-            temperature: 0.1
-          })
-        });
-        if (resp.status === 200) {
-          const data: any = await resp.json();
-          if (data.choices && data.choices[0] && data.choices[0].message?.content) {
-            console.info(`[Auto-Routing Tag Analysis] Success with Mistral ${model}`);
-            return data.choices[0].message.content;
-          }
-        } else {
-          console.warn(`[Auto-Routing Tag Analysis] Mistral ${model} returned status ${resp.status}`);
-        }
-      } catch (err: any) {
-        console.warn(`[Auto-Routing Tag Analysis] Mistral ${model} failed:`, err.message || err);
-      }
-    }
-  }
-
-  // 4. Google Gemini Gemma 4 (gemma-4-31b-it / gemma-4-26b-it)
-  const geminiApiKey = config.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
-  if (geminiApiKey) {
-    try {
-      console.info(`[Auto-Routing Tag Analysis] Trying Google Gemini Gemma 4...`);
-      const ai = new GoogleGenAI({ apiKey: geminiApiKey });
-      const response = await generateGemma4Content(ai, prompt, {
-        config: {
-          responseMimeType: "application/json",
-          temperature: 0.1
-        }
-      });
-      if (response && response.text) {
-        console.info(`[Auto-Routing Tag Analysis] Success with Gemini Gemma 4`);
-        return response.text;
-      }
-    } catch (err: any) {
-      console.warn(`[Auto-Routing Tag Analysis] Gemini Gemma 4 failed:`, err.message || err);
-    }
-
-    // 5. Google Gemini API Flash fallback (gemini-2.5-flash / gemini-3.5-flash)
-    const fallbackModels = ["gemini-2.5-flash", "gemini-3.5-flash"];
-    for (const model of fallbackModels) {
-      try {
-        console.info(`[Auto-Routing Tag Analysis] Trying Gemini with fallback ${model}...`);
-        const ai = new GoogleGenAI({ apiKey: geminiApiKey });
-        const response = await ai.models.generateContent({
-          model: model,
-          contents: prompt,
-          config: {
-            responseMimeType: "application/json",
-            temperature: 0.1
-          }
-        });
-        if (response && response.text) {
-          console.info(`[Auto-Routing Tag Analysis] Success with Gemini fallback ${model}`);
-          return response.text;
-        }
-      } catch (err: any) {
-        console.warn(`[Auto-Routing Tag Analysis] Gemini fallback ${model} failed:`, err.message || err);
-      }
-    }
-  }
-
-  throw new Error("All auto-routed models for Tag Analysis failed or were not configured.");
-}
-
-async function generateGuidanceWithFallback(config: any, prompt: string, temperature: number = 0.7): Promise<string> {
-  const geminiApiKey = config.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
-
-  // 1. Gemini Gemma 4 (gemma-4-31b-it or gemma-4-26b-it)
-  if (geminiApiKey) {
-    try {
-      console.info(`[Auto-Routing Guidance] Trying Gemini Gemma 4...`);
-      const ai = new GoogleGenAI({ apiKey: geminiApiKey });
-      const response = await generateGemma4Content(ai, prompt, {
-        config: { temperature }
-      });
-      if (response && response.text) {
-        console.info(`[Auto-Routing Guidance] Success with Gemini Gemma 4`);
-        return response.text;
-      }
-    } catch (err: any) {
-      console.warn(`[Auto-Routing Guidance] Gemini Gemma 4 failed:`, err.message || err);
-    }
-
-    // 2. Gemini 3.1 Flash Lite / Gemini 2.5 Flash / Gemini 1.5 Flash
-    const geminiModels = ["gemini-2.5-flash", "gemini-1.5-flash"];
-    for (const model of geminiModels) {
-      try {
-        console.info(`[Auto-Routing Guidance] Trying Gemini with model ${model}...`);
-        const ai = new GoogleGenAI({ apiKey: geminiApiKey });
-        const response = await ai.models.generateContent({
-          model: model,
-          contents: prompt,
-          config: { temperature }
-        });
-        if (response && response.text) {
-          console.info(`[Auto-Routing Guidance] Success with Gemini ${model}`);
-          return response.text;
-        }
-      } catch (err: any) {
-        console.warn(`[Auto-Routing Guidance] Gemini model ${model} failed:`, err.message || err);
-      }
-    }
-  }
-
-  // 3. Groq API models
-  if (config.GROQ_API_KEY) {
-    const groqModels = [
-      "llama-3.3-70b-versatile",
-      "meta-llama/llama-4-scout-17b-16e-instruct",
-      "openai/gpt-oss-20b",
-      "qwen/qwen3-32b"
-    ];
-    for (const model of groqModels) {
-      try {
-        console.info(`[Auto-Routing Guidance] Trying Groq with model ${model}...`);
-        const resp = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${config.GROQ_API_KEY}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            model: model,
-            messages: [{ role: "user", content: prompt }],
-            temperature: temperature
-          })
-        });
-        if (resp.status === 200) {
-          const data: any = await resp.json();
-          if (data.choices && data.choices[0] && data.choices[0].message?.content) {
-            console.info(`[Auto-Routing Guidance] Success with Groq ${model}`);
-            return data.choices[0].message.content;
-          }
-        } else {
-          console.warn(`[Auto-Routing Guidance] Groq ${model} returned status ${resp.status}`);
-        }
-      } catch (err: any) {
-        console.warn(`[Auto-Routing Guidance] Groq ${model} failed:`, err.message || err);
-      }
-    }
-  }
-
-  // 4. Cerebras API gemma-4-31b
-  if (config.CEREBRAS_API_KEY) {
-    try {
-      console.info(`[Auto-Routing Guidance] Trying Cerebras with gemma-4-31b...`);
-      const resp = await fetch("https://api.cerebras.ai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${config.CEREBRAS_API_KEY}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model: "gemma-4-31b",
-          messages: [{ role: "user", content: prompt }],
-          temperature: temperature
-        })
-      });
-      if (resp.status === 200) {
-        const data: any = await resp.json();
-        if (data.choices && data.choices[0] && data.choices[0].message?.content) {
-          console.info(`[Auto-Routing Guidance] Success with Cerebras gemma-4-31b`);
-          return data.choices[0].message.content;
-        }
-      } else {
-        console.warn(`[Auto-Routing Guidance] Cerebras gemma-4-31b returned status ${resp.status}`);
-      }
-    } catch (err: any) {
-      console.warn(`[Auto-Routing Guidance] Cerebras gemma-4-31b failed:`, err.message || err);
-    }
-  }
-
-  throw new Error("All auto-routed models for Generative Guidance failed or were not configured.");
-}
-
-async function transcribeAudioWithFallback(config: any, fileBuffer: Buffer, mimetype: string): Promise<string> {
-  // 1. Groq Whisper Large V3 / V3 Turbo
-  if (config.GROQ_API_KEY) {
-    const whisperModels = ["whisper-large-v3", "whisper-large-v3-turbo"];
-    for (const model of whisperModels) {
-      try {
-        console.info(`[Auto-Routing Transcription] Trying Groq Whisper with model ${model}...`);
-        
-        const formData = new FormData();
-        const blob = new Blob([fileBuffer], { type: mimetype || 'audio/webm' });
-        formData.append('file', blob, 'recording.webm');
-        formData.append('model', model);
-        formData.append('prompt', 'This is a personal memory narrative journal recording, often spoken in English or Greek, or a mix of both. Please transcribe it accurately.');
-
-        const resp = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${config.GROQ_API_KEY}`
-          },
-          body: formData
-        });
-
-        if (resp.status === 200) {
-          const data: any = await resp.json();
-          if (data && data.text) {
-            console.info(`[Auto-Routing Transcription] Success with Groq Whisper ${model}`);
-            return data.text.trim();
-          }
-        } else {
-          const errorMsg = await resp.text();
-          console.warn(`[Auto-Routing Transcription] Groq Whisper ${model} returned status ${resp.status}: ${errorMsg}`);
-        }
-      } catch (err: any) {
-        console.warn(`[Auto-Routing Transcription] Groq Whisper ${model} failed:`, err.message || err);
-      }
-    }
-  }
-
-  // 2. Gemini Native Audio
-  const geminiApiKey = config.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
-  if (geminiApiKey) {
-    try {
-      console.info(`[Auto-Routing Transcription] Trying Gemini Native Audio with gemini-2.5-flash...`);
-      const ai = new GoogleGenAI({ apiKey: geminiApiKey });
-      const audioBase64 = fileBuffer.toString('base64');
-      
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: [
-          {
-            inlineData: {
-              mimeType: mimetype || 'audio/webm',
-              data: audioBase64
-            }
-          },
-          "Transcribe this speech accurately in its original language (English or Greek) and return only the transcript text. Do not add any preamble, conversational commentary, formatting, or notes. Return only the transcript."
-        ]
-      });
-      
-      if (response && response.text) {
-        console.info(`[Auto-Routing Transcription] Success with Gemini Native Audio`);
-        return response.text.trim();
-      }
-    } catch (err: any) {
-      console.warn(`[Auto-Routing Transcription] Gemini Native Audio failed:`, err.message || err);
-    }
-  }
-
-  throw new Error("All auto-routed models for Audio Transcription failed or were not configured.");
-}
-
 async function startServer() {
+  await ensureVault();
+
+  // The session secret persists so that restarting the app does not sign you
+  // out. Generated once, on first boot.
+  let sessionSecret = (await loadConfig())[SECRET_KEY];
+  if (!sessionSecret) {
+    sessionSecret = newSecret();
+    await setEnvKey(SECRET_KEY, sessionSecret);
+  }
+
+  const passcodeHash = async () => (await loadConfig())[PASSCODE_KEY] || '';
+  const isAuthed = async (req: any) => {
+    if (!(await passcodeHash())) return true; // no passcode set — app is open
+    return verifySession(sessionSecret, parseCookies(req.headers?.cookie)[SESSION_COOKIE]);
+  };
+
   const app = express();
   const server = createServer(app);
   const wss = new WebSocketServer({ noServer: true });
 
-  server.on('upgrade', (request, socket, head) => {
-    if (request.url === '/ws/journal') {
-      wss.handleUpgrade(request, socket, head, (ws) => {
-        wss.emit('connection', ws, request);
-      });
+  server.on('upgrade', async (request, socket, head) => {
+    if (request.url !== '/ws/journal') return;
+    if (!(await isAuthed(request))) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+      return;
     }
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
   });
-  
-  app.use(express.json());
+
+  // A long journal entry is easily past the 100kb default.
+  app.use(express.json({ limit: '4mb' }));
+
+  /* ---- the lock ---------------------------------------------------------
+     Only /api is gated. The SPA shell stays public because it holds no data
+     and has to load in order to draw the lock screen at all. */
+
+  app.get('/api/auth/status', async (req, res) => {
+    const locked = Boolean(await passcodeHash());
+    res.json({ success: true, locked, authed: await isAuthed(req) });
+  });
+
+  app.post('/api/auth/unlock', async (req, res) => {
+    const stored = await passcodeHash();
+    if (!stored) return res.json({ success: true, authed: true });
+
+    const who = req.ip || 'local';
+    const wait = throttled(who);
+    if (wait) {
+      return res.status(429).json({ success: false, error: `Too many attempts. Try again in ${wait}s.` });
+    }
+
+    const passcode = typeof req.body?.passcode === 'string' ? req.body.passcode : '';
+    if (!verifyPasscode(passcode, stored)) {
+      recordFailure(who);
+      return res.status(401).json({ success: false, error: 'That is not the passcode.' });
+    }
+
+    recordSuccess(who);
+    res.setHeader('Set-Cookie', sessionCookie(signSession(sessionSecret), req.protocol === 'https'));
+    res.json({ success: true, authed: true });
+  });
+
+  app.post('/api/auth/lock', (req, res) => {
+    res.setHeader('Set-Cookie', clearCookie());
+    res.json({ success: true });
+  });
+
+  /** Set, change, or clear the passcode. Once one is set, changing it requires
+   *  a live session — otherwise the lock could be taken over from outside. */
+  app.post('/api/auth/passcode', async (req, res) => {
+    const stored = await passcodeHash();
+    if (stored && !(await isAuthed(req))) {
+      return res.status(401).json({ success: false, error: 'Unlock first.' });
+    }
+
+    const next = typeof req.body?.next === 'string' ? req.body.next : '';
+
+    if (next === '') {
+      await setEnvKey(PASSCODE_KEY, null);
+      return res.json({ success: true, locked: false });
+    }
+    if (next.length < 4) {
+      return res.status(400).json({ success: false, error: 'Use at least four characters.' });
+    }
+
+    await setEnvKey(PASSCODE_KEY, hashPasscode(next));
+    // Sign the caller straight in so setting a passcode never locks you out.
+    res.setHeader('Set-Cookie', sessionCookie(signSession(sessionSecret), req.protocol === 'https'));
+    res.json({ success: true, locked: true });
+  });
+
+  app.use('/api', async (req, res, next) => {
+    if (req.path.startsWith('/auth/')) return next();
+    if (await isAuthed(req)) return next();
+    res.status(401).json({ success: false, error: 'Locked.' });
+  });
 
   const upload = multer({ limits: { fileSize: 10 * 1024 * 1024 } });
 
   app.post('/api/journal/transcribe-audio', upload.single('audio'), async (req, res) => {
-    try {
-      if (!req.file) {
-        return res.status(400).json({ error: "No audio file uploaded." });
-      }
-      
-      const config = await loadConfig();
-      const transcript = await transcribeAudioWithFallback(config, req.file.buffer, req.file.mimetype || 'audio/webm');
-      res.json({ success: true, transcript });
-    } catch (err: any) {
-      console.error("Transcription Error:", err);
-      res.status(500).json({ error: err.message || err.toString() });
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: 'No audio file uploaded.' });
     }
+
+    // The recording goes to disk FIRST, and an entry is created to hold it.
+    // Everything after this point can fail without costing you the recording.
+    const id = newId();
+    let audio: string | undefined;
+    try {
+      audio = await saveAudio(id, req.file.buffer, req.file.mimetype || 'audio/webm');
+      await saveEntry({ id, title: 'Untitled recording', text: '', audio });
+    } catch (err: any) {
+      console.error('Vault write failed before transcription:', err);
+      return res.status(500).json({ success: false, error: 'Could not write to the vault: ' + err.message });
+    }
+
+    try {
+      const config = await loadConfig();
+      const result = await transcribe(config, req.file.buffer, req.file.mimetype || 'audio/webm', {
+        engine: req.body?.engine,
+        language: req.body?.language,
+      });
+      const transcript = result.text;
+      const entry = await saveEntry({ id, text: transcript });
+      res.json({
+        success: true,
+        transcript,
+        entryId: id,
+        entry,
+        engine: { provider: result.provider, model: result.model, local: result.local },
+      });
+    } catch (err: any) {
+      console.error('Transcription Error:', err);
+      // 200, not 500: the recording was kept, so this is a partial success and
+      // the client needs the id to offer a retry.
+      res.json({
+        success: false,
+        entryId: id,
+        audioKept: Boolean(audio),
+        error: err.message || err.toString(),
+      });
+    }
+  });
+
+  /* ---- vault ------------------------------------------------------------- */
+
+  app.get('/api/vault/info', async (req, res) => {
+    try {
+      const entries = await listEntries();
+      res.json({ success: true, dir: VAULT_DIR, keepAudio: KEEP_AUDIO, count: entries.length });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  app.get('/api/vault/entries', async (req, res) => {
+    try {
+      res.json({ success: true, entries: await listEntries() });
+    } catch (e: any) {
+      console.error('Vault list error:', e);
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  app.get('/api/vault/entries/:id', async (req, res) => {
+    try {
+      res.json({ success: true, entry: await readEntry(req.params.id) });
+    } catch (e: any) {
+      res.status(404).json({ success: false, error: 'That entry is not in the vault.' });
+    }
+  });
+
+  app.post('/api/vault/entries', async (req, res) => {
+    try {
+      const { id, title, text, indicators, drive } = req.body || {};
+      if (typeof text !== 'string' && typeof drive !== 'string') {
+        return res.status(400).json({ success: false, error: 'Nothing to save.' });
+      }
+      const entry = await saveEntry({
+        id: isValidId(id) ? id : undefined,
+        title,
+        text,
+        indicators: Array.isArray(indicators) ? indicators.map(String) : undefined,
+        drive,
+      });
+      res.json({ success: true, entry });
+    } catch (e: any) {
+      console.error('Vault save error:', e);
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  app.post('/api/vault/entries/:id/trash', async (req, res) => {
+    try {
+      await trashEntry(req.params.id);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(400).json({ success: false, error: e.message });
+    }
+  });
+
+  app.get('/api/vault/entries/:id/audio', async (req, res) => {
+    if (!isValidId(req.params.id)) return res.status(404).end();
+    const file = await findAudio(req.params.id);
+    if (!file) return res.status(404).end();
+    res.sendFile(file, err => {
+      if (err && !res.headersSent) res.status(404).end();
+    });
   });
 
   app.post('/api/journal/analyze-tags', async (req, res) => {
     try {
       const { transcript } = req.body;
       if (!transcript || transcript.trim().length < 10) {
-        return res.json({ tags: [] });
+        return res.json({ success: true, tags: [], indicators: [] });
       }
 
       const config = await loadConfig();
-      const prompt = `Analyze this personal narrative transcript and identify the presence of psychological abuse patterns or trauma-informed therapy concepts mentioned or depicted in the text.
-Select only relevant terms from this list of therapy-speak words: "gaslighting", "DARVO", "gray rock", "fawn", "hoovering", "flying monkeys", "projection", "minimization", "isolation", "triangulation", "boundaries", "trauma bonding", "emotional blackmail".
-
-Return ONLY a JSON array of strings containing the identified terms in lowercase. Do not include any formatting, code blocks, or additional text.
-Transcript:
-"${transcript}"`;
-
-      let responseText = "";
+      let indicators: Awaited<ReturnType<typeof normalise>> = [];
       try {
-        responseText = await analyzeTagsWithFallback(config, prompt);
+        const result = await chat(config, {
+          task: 'indicators',
+          prompt: await buildPrompt(transcript),
+          temperature: 0.1,
+          json: true,
+        });
+
+        // Small models fence their JSON, prepend a sentence, or return a bare
+        // array. None of that is worth failing a save over.
+        let text = result.text.trim();
+        const fence = text.match(/\u0060\u0060\u0060(?:json)?\s*([\s\S]*?)\u0060\u0060\u0060/);
+        if (fence) text = fence[1].trim();
+        const span = text.match(/[[{][\s\S]*[\]}]/);
+        if (span) text = span[0];
+
+        indicators = await normalise(JSON.parse(text), transcript);
       } catch (err: any) {
-        console.warn("Auto-routing Tag Analysis failed:", err.message || err);
+        // A journal entry saves whether or not anything could be said about it.
+        console.warn('Indicator analysis failed:', err?.message || err);
       }
 
-      let tags: string[] = [];
-      if (responseText) {
-        try {
-          let cleanText = responseText.trim();
-          if (cleanText.startsWith("```json")) {
-            cleanText = cleanText.substring(7);
-          }
-          if (cleanText.endsWith("```")) {
-            cleanText = cleanText.substring(0, cleanText.length - 3);
-          }
-          cleanText = cleanText.trim();
-
-          const parsed = JSON.parse(cleanText);
-          if (Array.isArray(parsed)) {
-            tags = parsed;
-          } else if (parsed && Array.isArray(parsed.tags)) {
-            tags = parsed.tags;
-          } else if (parsed && typeof parsed === 'object') {
-            tags = Object.values(parsed).filter(val => typeof val === 'string') as string[];
-          }
-        } catch (e) {
-          const matched = responseText.match(/"([^"]+)"/g);
-          if (matched) {
-            tags = matched.map(m => m.replace(/"/g, ''));
-          }
-        }
-      }
-
-      const approvedWords = ["gaslighting", "darvo", "gray rock", "fawn", "hoovering", "flying monkeys", "projection", "minimization", "isolation", "triangulation", "boundaries", "trauma bonding", "emotional blackmail"];
-      
-      let filteredTags = tags
-        .map(t => t.toLowerCase().trim())
-        .filter(t => approvedWords.includes(t));
-
-      filteredTags = filteredTags.map(t => t.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '));
-      res.json({ tags: filteredTags });
+      res.json({
+        success: true,
+        indicators,
+        // The Vault has always stored plain labels in the entry's front matter.
+        tags: indicators.map(i => i.label),
+      });
     } catch (e) {
-      console.error("Analyze Tags Error:", e);
-      res.json({ tags: [] });
+      console.error('Analyze Tags Error:', e);
+      res.json({ success: true, tags: [], indicators: [] });
+    }
+  });
+
+  /** The vocabulary itself, so the interface can show what a term means beside
+   *  the tag rather than leaving a label nobody can check. */
+  app.get('/api/vocabulary', async (_req, res) => {
+    res.json({ success: true, categories: CATEGORIES, terms: await loadTerms() });
+  });
+
+  /* ---- providers ---------------------------------------------------------- */
+
+  /** What is configured, what is reachable, and what a local runtime actually
+   *  has installed. */
+  /** What is configured, what is reachable, and which model is assigned to
+   *  each job.
+   *
+   *  `?load=1` is the "Load models" button: it asks every provider what
+   *  models it actually has. Plain GETs that cost nothing, but a dozen network
+   *  calls, so it is not what happens merely by opening Settings.
+   *  STANDARDS #10 — the endpoint is the authority on model names, not us. */
+  app.get('/api/providers', async (req, res) => {
+    try {
+      const config = await loadConfig();
+      const deep = req.query.load === '1' || req.query.deep === '1';
+      const assignments: Record<string, { providerId: string; model: string }[]> = {};
+      for (const t of TASKS) assignments[t.id] = slotsFor(config, t.id);
+
+      res.json({
+        success: true,
+        routing: readRouting(config),
+        localOnly: isLocalOnly(config),
+        providers: await probe(config, deep),
+        loaded: deep,
+        tasks: TASKS,
+        assignments,
+        synthesis: synthesisChoices(config),
+      });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  /** Try one assigned slot for real, and report what happened in plain
+   *  English. Assigning a model you cannot reach is the failure this app used
+   *  to discover halfway through a recording. */
+  app.post('/api/providers/test', async (req, res) => {
+    const task = String(req.body?.task || '') as Task;
+    if (!TASKS.some(t => t.id === task)) {
+      return res.status(400).json({ success: false, error: 'Unknown job.' });
+    }
+    if (task === 'transcribe') {
+      return res.json({
+        success: false,
+        error: 'Transcription is tested by making a recording — there is no cheap way to fake one.',
+      });
+    }
+    try {
+      const config = await loadConfig();
+      const result = await chat(config, {
+        task,
+        prompt: 'Reply with the single word: ready',
+        temperature: 0,
+        maxTokens: 16,
+      });
+      res.json({
+        success: true,
+        provider: result.provider,
+        model: result.model,
+        local: result.local,
+        reply: result.text.trim().slice(0, 80),
+      });
+    } catch (e: any) {
+      res.json({ success: false, error: e.message || String(e) });
     }
   });
 
   app.get('/api/config', async (req, res) => {
     const config = await loadConfig();
-    const safeConfig = { ...config };
-    // Make sure we include process.env overrides
-    safeConfig.GEMINI_API_KEY = config.GEMINI_API_KEY || process.env.GEMINI_API_KEY || '';
-    safeConfig.NVIDIA_API_KEY = config.NVIDIA_API_KEY || process.env.NVIDIA_API_KEY || '';
-    safeConfig.MISTRAL_API_KEY = config.MISTRAL_API_KEY || process.env.MISTRAL_API_KEY || '';
-    safeConfig.GROQ_API_KEY = config.GROQ_API_KEY || process.env.GROQ_API_KEY || '';
-    safeConfig.CEREBRAS_API_KEY = config.CEREBRAS_API_KEY || process.env.CEREBRAS_API_KEY || '';
-    safeConfig.GOOGLE_CLIENT_ID = config.GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || '';
-    safeConfig.GOOGLE_CLIENT_SECRET = config.GOOGLE_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET || '';
-
-    // mask secrets for UI
-    if (safeConfig.GEMINI_API_KEY && safeConfig.GEMINI_API_KEY.length > 4) safeConfig.GEMINI_API_KEY = '***' + safeConfig.GEMINI_API_KEY.slice(-4);
-    if (safeConfig.MISTRAL_API_KEY && safeConfig.MISTRAL_API_KEY.length > 4) safeConfig.MISTRAL_API_KEY = '***' + safeConfig.MISTRAL_API_KEY.slice(-4);
-    if (safeConfig.NVIDIA_API_KEY && safeConfig.NVIDIA_API_KEY.length > 4) safeConfig.NVIDIA_API_KEY = '***' + safeConfig.NVIDIA_API_KEY.slice(-4);
-    if (safeConfig.GROQ_API_KEY && safeConfig.GROQ_API_KEY.length > 4) safeConfig.GROQ_API_KEY = '***' + safeConfig.GROQ_API_KEY.slice(-4);
-    if (safeConfig.CEREBRAS_API_KEY && safeConfig.CEREBRAS_API_KEY.length > 4) safeConfig.CEREBRAS_API_KEY = '***' + safeConfig.CEREBRAS_API_KEY.slice(-4);
-    if (safeConfig.GOOGLE_CLIENT_SECRET && safeConfig.GOOGLE_CLIENT_SECRET.length > 4) safeConfig.GOOGLE_CLIENT_SECRET = '***' + safeConfig.GOOGLE_CLIENT_SECRET.slice(-4);
+    const safeConfig: Record<string, string> = {};
+    for (const key of CONFIG_KEYS) {
+      const value = config[key] || '';
+      // Secrets go out masked. The client sends the mask back untouched and the
+      // server keeps the stored value, so a key can be set without ever being
+      // readable again.
+      safeConfig[key] = SECRET_KEYS.has(key) && value.length > 4 ? '***' + value.slice(-4) : value;
+    }
     res.json(safeConfig);
   });
 
   app.post('/api/config', async (req, res) => {
-    const newConfig = req.body;
+    const newConfig = req.body || {};
     const currentConfig = await loadConfig();
     const toSave: any = {};
-    for (const key in newConfig) {
-      if (typeof newConfig[key] === 'string' && newConfig[key].startsWith('***')) {
-        toSave[key] = currentConfig[key] || '';
-      } else {
-        toSave[key] = newConfig[key];
-      }
+    for (const key of CONFIG_KEYS) {
+      const incoming = newConfig[key];
+      if (typeof incoming !== 'string') continue;
+      toSave[key] = incoming.startsWith('***') ? currentConfig[key] || '' : incoming;
     }
     await saveConfig(toSave);
     res.json({ success: true });
   });
 
-  // Google OAuth Endpoints
-  app.get('/api/auth/google-url', async (req, res) => {
-    try {
-      const config = await loadConfig();
-      const clientId = config.GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID;
-      if (!clientId) {
-        return res.status(400).json({ error: 'Google Client ID is not configured. Please add it in Settings.' });
-      }
+  /* ---- Google ------------------------------------------------------------
+     The browser never handles a Google credential. It asks the server to start
+     consent, and thereafter simply asks for things to be archived. */
 
-      // Handle the preview URL and local URL dynamically
-      const origin = req.headers.referer ? new URL(req.headers.referer).origin : `${req.protocol}://${req.get('host')}`;
-      const redirectUri = `${origin}/auth/callback`;
-
-      const params = new URLSearchParams({
-        client_id: clientId,
-        redirect_uri: redirectUri,
-        response_type: 'code',
-        scope: 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/userinfo.email',
-        access_type: 'offline',
-        prompt: 'consent'
+  /* ---- local-only --------------------------------------------------------
+     Routing is a promise, not a preference. Closing these here means a stray
+     click cannot put an entry into someone else's datacentre, whatever is
+     sitting in .env. */
+  app.use(['/api/google', '/api/drive', '/auth/callback'], async (_req, res, next) => {
+    if (isLocalOnly(await loadConfig())) {
+      return res.status(409).json({
+        success: false,
+        error: 'Local-only routing is on, so Google Drive is switched off. Change it under Settings → Models.',
       });
+    }
+    next();
+  });
 
-      res.json({ url: `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}` });
+  app.get('/api/google/status', async (req, res) => {
+    try {
+      res.json({ success: true, ...(await google.status()) });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.status(500).json({ success: false, error: e.message });
     }
   });
 
+  app.get('/api/google/url', async (req, res) => {
+    try {
+      const config = await loadConfig();
+      if (!config.GOOGLE_CLIENT_ID) {
+        return res
+          .status(400)
+          .json({ success: false, error: 'Add a Google OAuth client ID and secret in Settings first.' });
+      }
+      const uri = redirectUri(req);
+      res.json({ success: true, url: google.authUrl(config.GOOGLE_CLIENT_ID, uri, google.newState()), redirectUri: uri });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  app.post('/api/google/disconnect', async (req, res) => {
+    try {
+      await google.disconnect();
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  const closingPage = (title: string, detail: string, ok: boolean) => `<!doctype html>
+<html><head><meta charset="utf-8"><title>${title}</title>
+<style>
+  body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0B0808;
+    color:#F0E4D2;font-family:"Segoe UI",system-ui,sans-serif;text-align:center;padding:2rem}
+  h1{font-size:1.4rem;letter-spacing:.12em;text-transform:uppercase;font-weight:400;
+    color:${ok ? '#D8C39B' : '#A6342A'};margin:0 0 .6rem}
+  p{color:#B1A08C;max-width:46ch;margin:0}
+</style></head>
+<body><div><h1>${title}</h1><p>${detail}</p></div>
+<script>
+  if (window.opener) { window.opener.postMessage({ type: 'GOOGLE_LINK_DONE', ok: ${ok} }, window.location.origin); setTimeout(function(){ window.close(); }, ${ok ? 900 : 4000}); }
+  else { setTimeout(function(){ window.location.href = '/'; }, ${ok ? 900 : 4000}); }
+</script></body></html>`;
+
   app.get(['/auth/callback', '/auth/callback/'], async (req, res) => {
     try {
-      const { code } = req.query;
-      if (!code) {
-        return res.send(`<html><body><script>window.close();</script><p>No authorization code received.</p></body></html>`);
-      }
+      const { code, state, error } = req.query;
+      if (error) throw new Error(String(error));
+      if (!code) throw new Error('Google sent no authorization code.');
+      // The state proves this callback answers a consent request that started
+      // here, rather than one a third party induced.
+      if (!google.consumeState(state)) throw new Error('That linking attempt expired. Start it again from Settings.');
 
-      const config = await loadConfig();
-      const clientId = config.GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID;
-      const clientSecret = config.GOOGLE_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET;
-
-      if (!clientId || !clientSecret) {
-        throw new Error('Google Client ID or Client Secret is missing in config.');
-      }
-
-      const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
-
-      const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          code: code.toString(),
-          client_id: clientId,
-          client_secret: clientSecret,
-          redirect_uri: redirectUri,
-          grant_type: 'authorization_code',
-        })
-      });
-
-      const tokens = await tokenRes.json();
-      if (tokens.error) {
-        throw new Error(tokens.error_description || tokens.error);
-      }
-
-      let userEmail = 'Google User';
-      if (tokens.access_token) {
-        try {
-          const infoRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-            headers: { Authorization: `Bearer ${tokens.access_token}` }
-          });
-          const info = await infoRes.json();
-          if (info.email) {
-            userEmail = info.email;
-          }
-        } catch (e) {}
-      }
-
-      res.send(`
-        <html>
-          <body>
-            <script>
-              if (window.opener) {
-                window.opener.postMessage({ 
-                  type: 'OAUTH_AUTH_SUCCESS', 
-                  accessToken: ${JSON.stringify(tokens.access_token)}, 
-                  refreshToken: ${JSON.stringify(tokens.refresh_token)},
-                  email: ${JSON.stringify(userEmail)}
-                }, '*');
-                window.close();
-              } else {
-                window.location.href = '/';
-              }
-            </script>
-            <p>Authentication successful. You can close this window now.</p>
-          </body>
-        </html>
-      `);
+      const { email } = await google.exchangeCode(String(code), redirectUri(req));
+      res.send(closingPage('Linked', `My Story can now write to the Drive of ${email}.`, true));
     } catch (e: any) {
-      console.error("Callback Error:", e);
-      res.status(500).send(`<html><body><p>Authentication failed: ${e.message}</p></body></html>`);
+      console.error('Google callback error:', e);
+      res.status(400).send(closingPage('Linking failed', String(e.message || e), false));
     }
   });
 
   // Google Drive/Docs Operations
   app.get('/api/drive/list-files', async (req, res) => {
     try {
-      const accessToken = req.headers.authorization?.split(' ')[1];
-      if (!accessToken) {
-        return res.status(401).json({ error: 'Unauthorized. Please link your Google Account.' });
-      }
-
+      const accessToken = await google.getAccessToken();
       const driveRes = await fetch("https://www.googleapis.com/drive/v3/files?q=trashed=false and (mimeType='application/vnd.google-apps.document' or name contains 'My Story' or name contains 'Reflections' or mimeType='text/markdown')&orderBy=createdTime desc&fields=files(id,name,mimeType,createdTime)", {
         headers: { Authorization: `Bearer ${accessToken}` }
       });
@@ -729,16 +568,14 @@ Transcript:
       res.json({ success: true, files: data.files || [] });
     } catch (e: any) {
       console.error("List Files Error:", e);
-      res.status(500).json({ error: e.message || e.toString() });
+      res.status(e instanceof NotConnected ? 401 : 500).json({ success: false, error: e.message || e.toString() });
     }
   });
 
   app.post('/api/drive/create-doc', async (req, res) => {
     try {
-      const { accessToken, title, content } = req.body;
-      if (!accessToken) {
-        return res.status(401).json({ error: 'Unauthorized. Please link your Google Account.' });
-      }
+      const { title, content } = req.body;
+      const accessToken = await google.getAccessToken();
 
       const createRes = await fetch('https://docs.googleapis.com/v1/documents', {
         method: 'POST',
@@ -783,16 +620,14 @@ Transcript:
       res.json({ success: true, documentId, viewUrl });
     } catch (e: any) {
       console.error("Create Doc Error:", e);
-      res.status(500).json({ error: e.message || e.toString() });
+      res.status(e instanceof NotConnected ? 401 : 500).json({ success: false, error: e.message || e.toString() });
     }
   });
 
   app.post('/api/drive/upload-file', async (req, res) => {
     try {
-      const { accessToken, filename, content, mimeType } = req.body;
-      if (!accessToken) {
-        return res.status(401).json({ error: 'Unauthorized. Please link your Google Account.' });
-      }
+      const { filename, content, mimeType } = req.body;
+      const accessToken = await google.getAccessToken();
 
       const metadata = {
         name: filename,
@@ -828,160 +663,98 @@ Transcript:
       res.json({ success: true, fileId, viewUrl });
     } catch (e: any) {
       console.error("Upload File Error:", e);
-      res.status(500).json({ error: e.message || e.toString() });
+      res.status(e instanceof NotConnected ? 401 : 500).json({ success: false, error: e.message || e.toString() });
     }
   });
 
   app.post('/api/journal/autotitle', async (req, res) => {
+    const { transcript } = req.body;
+    const fallback = () =>
+      String(transcript || '')
+        .split(/\s+/)
+        .slice(0, 5)
+        .join(' ')
+        .slice(0, 60) || 'Untitled Memory';
+
+    if (!transcript || transcript.trim().length < 5) {
+      return res.json({ title: 'Untitled Memory' });
+    }
     try {
-      const { transcript } = req.body;
-      if (!transcript || transcript.trim().length < 5) {
-        return res.json({ title: "Untitled Memory" });
-      }
-      
       const config = await loadConfig();
-      const apiKey = config.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        // Fallback to title substring if Gemini is not set up yet
-        const title = "Reflections on " + transcript.split(' ').slice(0, 3).join(' ') + "...";
-        return res.json({ title });
-      }
-      
-      const ai = new GoogleGenAI({ apiKey });
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: `Based on the following journal entry transcript, generate a concise, elegant, and evocative title of 2 to 5 words. Do not use quotes, punctuation, or generic filler. 
-Transcript:
+      const result = await chat(config, {
+        task: 'title',
+        temperature: 0.3,
+        prompt: `Based on the following journal entry, generate a concise, elegant, evocative title of 2 to 5 words. Do not use quotes, punctuation, or generic filler. Return only the title.
+
+Entry:
 "${transcript}"`,
-        config: { temperature: 0.3 }
       });
-      
-      const title = response.text?.trim() || "Untitled Memory";
-      res.json({ title });
+      const title = result.text.trim().replace(/^["'\u201c]|["'\u201d]$/g, '').slice(0, 80);
+      res.json({ title: title || fallback() });
     } catch (e: any) {
-      console.error(e);
-      res.json({ title: "Untitled Memory" });
+      console.warn('Autotitle failed:', e?.message || e);
+      res.json({ title: fallback() });
     }
   });
 
   app.post('/api/synthesize', async (req, res) => {
-    const { files, model, prompt, accessToken } = req.body;
+    const { files, localIds, model, prompt } = req.body;
     const config = await loadConfig();
 
     try {
-      let filesContent = "";
-      
-      if (files && files.length > 0 && accessToken) {
+      const parts: string[] = [];
+
+      // Local entries first — they are the source of truth.
+      if (Array.isArray(localIds) && localIds.length > 0) {
+        for (const id of localIds) {
+          if (!isValidId(id)) continue;
+          try {
+            const entry = await readEntry(id);
+            parts.push(`--- ENTRY: ${entry.title} (${entry.created.slice(0, 10)}) ---\n${entry.text}\n`);
+          } catch (e) {
+            console.warn(`Synthesis skipped unreadable entry ${id}`);
+          }
+        }
+      }
+
+      if (files && files.length > 0) {
+        const accessToken = await google.getAccessToken();
         const contents = await Promise.all(files.map(async (f: any) => {
           const contentText = await fetchFileContent(accessToken, f.id, f.mimeType);
           return `--- FILE: ${f.name} ---\n${contentText}\n`;
         }));
-        filesContent = contents.join("\n");
-      } else {
-        filesContent = "No external files selected or no Google Account linked. Using template entries.";
+        parts.push(...contents);
       }
 
-      let output = "";
+      if (parts.length === 0) {
+        return res.status(400).json({ success: false, error: 'No sources selected.' });
+      }
+
+      const filesContent = parts.join('\n');
+
       const contentPrompt = `${prompt}\n\nSelected Source Materials Content:\n${filesContent}`;
 
-      if (model.startsWith('nvidia') || model.startsWith('openai') || model.startsWith('qwen')) {
-        const apiKey = config.NVIDIA_API_KEY;
-        if (!apiKey) throw new Error("NVIDIA_API_KEY is not configured in Settings.");
-        const response = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${apiKey}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            model: model,
-            messages: [{ role: "user", content: contentPrompt }],
-            temperature: 0.01,
-            max_tokens: 3000
-          })
-        });
-        const data: any = await response.json();
-        if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
-        output = data.choices[0].message.content;
-      } else if (model === 'llama-3.3-70b-versatile' || 
-                 model === 'meta-llama/llama-4-scout-17b-16e-instruct' || 
-                 model === 'openai/gpt-oss-20b' || 
-                 model === 'qwen/qwen3-32b') {
-        const apiKey = config.GROQ_API_KEY;
-        if (!apiKey) throw new Error("GROQ_API_KEY is not configured in Settings.");
-        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${apiKey}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            model: model,
-            messages: [{ role: "user", content: contentPrompt }],
-            temperature: 0.01
-          })
-        });
-        const data: any = await response.json();
-        if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
-        output = data.choices[0].message.content;
-      } else if (model === 'cerebras/gemma-4-31b') {
-        const apiKey = config.CEREBRAS_API_KEY;
-        if (!apiKey) throw new Error("CEREBRAS_API_KEY is not configured in Settings.");
-        const response = await fetch("https://api.cerebras.ai/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${apiKey}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            model: "gemma-4-31b",
-            messages: [{ role: "user", content: contentPrompt }],
-            temperature: 0.01
-          })
-        });
-        const data: any = await response.json();
-        if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
-        output = data.choices[0].message.content;
-      } else if (model.startsWith('mistral') || model.startsWith('magistral')) {
-        const apiKey = config.MISTRAL_API_KEY;
-        if (!apiKey) throw new Error("MISTRAL_API_KEY is not configured in Settings.");
-        const actualModel = model.replace('magistral', 'mistral');
-        const response = await fetch("https://api.mistral.ai/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${apiKey}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            model: actualModel,
-            messages: [{ role: "user", content: contentPrompt }],
-            temperature: 0.01
-          })
-        });
-        const data = await response.json();
-        if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
-        output = data.choices[0].message.content;
-      } else { // gemini / gemma
-        const apiKey = config.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
-        if (!apiKey) throw new Error("GEMINI_API_KEY is not configured in Settings.");
-        const ai = new GoogleGenAI({ apiKey });
-        
-        if (model === 'gemma-4-31b') {
-          const response = await generateGemma4Content(ai, contentPrompt, {
-            config: { temperature: 0.01 }
-          });
-          output = response.text || "";
-        } else {
-          const response = await generateContentWithFallback(ai, {
-              model: model,
-              contents: contentPrompt,
-              config: { temperature: 0.01 }
-          });
-          output = response.text || "";
-        }
-      }
+      // The picker sends "<providerId>::<model>". A bare value is still
+      // accepted and routed down the normal chain.
+      const raw = String(model || '');
+      const [pickedProvider, pickedModel] = raw.includes('::') ? raw.split('::') : ['', raw];
 
-      res.json({ success: true, draft: output });
+      const result = await chat(config, {
+        task: 'synthesis',
+        prompt: contentPrompt,
+        temperature: 0.2,
+        maxTokens: 4000,
+        ...(pickedModel ? { model: pickedModel } : {}),
+        ...(pickedProvider ? { providerId: pickedProvider } : {}),
+      });
+
+      res.json({
+        success: true,
+        draft: result.text,
+        provider: result.provider,
+        model: result.model,
+        local: result.local,
+      });
     } catch (e: any) {
       console.error(e);
       res.status(500).json({ success: false, error: e.message || e.toString() });
@@ -1004,7 +777,7 @@ They have just shared these raw thoughts/memories:
 Provide a warm, grounded, validating response in 1-3 sentences. Speak with sincerity and comfort. Do not be overly medical or clinical. Avoid fawning or using overly dramatic AI clichés.`;
           
           try {
-            const responseText = await generateGuidanceWithFallback(config, prompt, 0.7);
+            const responseText = (await chat(config, { task: 'companion', prompt, temperature: 0.7 })).text;
             ws.send(JSON.stringify({ type: 'audio_response', text: responseText }));
           } catch (err: any) {
             console.error(err);
@@ -1022,7 +795,7 @@ Current narrative:
 Ask a gentle, open-ended question or request in 1-2 sentences that helps them explore deeper or continue their thoughts without feeling pressured. Keep it natural and warm.`;
           
           try {
-            const responseText = await generateGuidanceWithFallback(config, prompt, 0.7);
+            const responseText = (await chat(config, { task: 'companion', prompt, temperature: 0.7 })).text;
             ws.send(JSON.stringify({ type: 'audio_response', text: responseText }));
           } catch (err: any) {
             console.error(err);
@@ -1049,8 +822,24 @@ Ask a gentle, open-ended question or request in 1-2 sentences that helps them ex
     });
   }
 
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
+  server.listen(PORT, HOST, async () => {
+    console.log(`My Story running on http://${HOST}:${PORT}`);
+    console.log(`Vault: ${VAULT_DIR}`);
+    const boot = await loadConfig();
+    const chain = await probe(boot);
+    const usable = chain.filter(p => !p.error);
+    console.log(
+      `Models: ${readRouting(boot)} — ` +
+        (usable.length ? usable.map(p => p.label + (p.local ? ' (local)' : '')).join(', ') : 'none configured'),
+    );
+    const loopback = HOST === '127.0.0.1' || HOST === 'localhost' || HOST === '::1';
+    if (!(await passcodeHash()) && !loopback) {
+      console.warn(
+        `\n  !  No passcode is set, and this is listening on ${HOST}.\n` +
+        `     Anyone who can reach ${HOST}:${PORT} can read the vault.\n` +
+        `     Set one under Settings, or bind HOST to your Tailscale address.\n`
+      );
+    }
   });
 }
 
