@@ -60,7 +60,11 @@ import { buildPrompt, normalise, loadTerms, CATEGORIES } from './vocabulary.ts';
 
 dotenv.config();
 
-const PORT = Number(process.env.PORT) || 3000;
+// 4747, not 3000. Port 3000 is the busiest number in local development —
+// Image Forge's dev server sits on it with strictPort, so whichever of the two
+// started second simply died. 4747 also avoids 3001, 4000, 5000, 5173, 8000,
+// 8080 and 9000, so somebody else's machine is unlikely to collide either.
+const PORT = Number(process.env.PORT) || 4747;
 // 0.0.0.0 means every interface, which on a machine that is also on your home
 // LAN is more than the tailnet. Set HOST to the Tailscale address to publish
 // there and nowhere else.
@@ -821,6 +825,29 @@ Ask a gentle, open-ended question or request in 1-2 sentences that helps them ex
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  // EADDRINUSE is the single most likely first-run failure, and Node's own
+  // message is a stack trace. STANDARDS #4.
+  server.on('error', (err: any) => {
+    if (err?.code === 'EADDRINUSE') {
+      console.error(
+        `\n  !  Port ${PORT} is already in use, so My Story did not start.\n` +
+          `     Something else is listening there — another copy of this app, or\n` +
+          `     another project's dev server.\n\n` +
+          `     Start it somewhere else instead:   PORT=4748 npm run dev\n`,
+      );
+      process.exit(1);
+    }
+    if (err?.code === 'EACCES') {
+      console.error(
+        `\n  !  Not allowed to listen on port ${PORT}.\n` +
+          `     Ports below 1024 need administrator rights. Pick a higher one:\n` +
+          `     PORT=4747 npm run dev\n`,
+      );
+      process.exit(1);
+    }
+    throw err;
+  });
 
   server.listen(PORT, HOST, async () => {
     console.log(`My Story running on http://${HOST}:${PORT}`);

@@ -19,9 +19,9 @@ services:
 
     ports:
       # Bound to loopback on purpose. Reach it from your phone over Tailscale
-      # (see DEPLOY.md), or change this to "3000:3000" if you have decided your
+      # (see DEPLOY.md), or change this to "4747:4747" if you have decided your
       # LAN is somewhere this may answer.
-      - '127.0.0.1:3000:3000'
+      - '127.0.0.1:4747:4747'
 
     volumes:
       - ./vault:/app/vault
@@ -41,7 +41,7 @@ services:
       - 'host.docker.internal:host-gateway'
 
     healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3000/api/auth/status >/dev/null 2>&1 || exit 1']
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:4747/api/auth/status >/dev/null 2>&1 || exit 1']
       interval: 30s
       timeout: 5s
       retries: 3

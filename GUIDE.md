@@ -44,7 +44,7 @@ The very short version:
 1. Install **Node.js** from <https://nodejs.org> (take the LTS one).
 2. Download this project and unzip it.
 3. Open a terminal in that folder and type `npm install`, then `npm run dev`.
-4. Open **<http://localhost:3000>** in your browser.
+4. Open **<http://localhost:4747>** in your browser.
 
 Then two settings, both important:
 
@@ -164,7 +164,7 @@ from the list — that list is what your key can genuinely use today.
 ## Part 8 · Grown-up extras (optional)
 
 - **Your phone.** Install Tailscale on both machines, run
-  `sudo tailscale serve --bg 3000`, open the `https://…ts.net` address on the
+  `sudo tailscale serve --bg 4747`, open the `https://…ts.net` address on the
   phone, then **Add to Home Screen**. See [DEPLOY.md](DEPLOY.md).
 - **Always on.** [DEPLOY.md](DEPLOY.md) has a copy-paste setup for a mini PC
   that starts on boot and survives power cuts.
@@ -181,7 +181,7 @@ from the list — that list is what your key can genuinely use today.
 
 ## The whole thing on one page
 
-1. `npm install`, `npm run dev`, open `localhost:3000`.
+1. `npm install`, `npm run dev`, open `localhost:4747`.
 2. Set a passcode. **Write it down.**
 3. Give it a model. **Load models**, then assign.
 4. Talk or type. It saves itself.

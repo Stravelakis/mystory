@@ -47,12 +47,12 @@ The first line takes a minute or two — it is fetching the parts. The second on
 starts the app and prints something like:
 
 ```
-My Story running on http://0.0.0.0:3000
+My Story running on http://0.0.0.0:4747
 Vault: /home/you/mystory/vault
 Models: cloud-first — none configured
 ```
 
-Now open **<http://localhost:3000>** in your browser.
+Now open **<http://localhost:4747>** in your browser.
 
 To stop it, press **Ctrl + C** in the terminal. To start it again, `npm run dev`.
 
@@ -131,7 +131,7 @@ page is on `https` (or on the computer itself). So this needs one extra piece:
 
 1. Install [Tailscale](https://tailscale.com) — free for personal use — on the
    computer running the app **and** on your phone. Sign into the same account.
-2. On the computer: `sudo tailscale serve --bg 3000`
+2. On the computer: `sudo tailscale serve --bg 4747`
 3. On your phone, open the `https://…ts.net` address Tailscale gives you.
 4. **Share → Add to Home Screen.** It gets its own icon and opens full screen.
 
@@ -160,8 +160,8 @@ touch .env && mkdir -p vault && docker compose up -d
 | What you see | What it means |
 |---|---|
 | `npm: command not found` | Node.js is not installed — back to Step 2. |
-| `EADDRINUSE` / port 3000 in use | Something else is on that port. `PORT=3001 npm run dev`. |
-| Page loads but **RECORD** does nothing | The browser is refusing the microphone. Use `http://localhost:3000` on the machine itself, or the Tailscale `https` address from your phone. Not an embedded preview pane. |
+| `Port 4747 is already in use` | Another copy of this app, or another project's dev server. `PORT=4748 npm run dev`. |
+| Page loads but **RECORD** does nothing | The browser is refusing the microphone. Use `http://localhost:4747` on the machine itself, or the Tailscale `https` address from your phone. Not an embedded preview pane. |
 | "No model is set up for this job" | Step 4B. Press **Load models** after pasting a key. |
 | Google key rejected | `npm run gemini:doctor` — it will say which of the four usual causes it is. |
 | Everything is slow | A local model on a machine with no GPU is genuinely slow. Assign a small model to *Indicators* and *Titles*, and keep the big one for *Synthesis*. |

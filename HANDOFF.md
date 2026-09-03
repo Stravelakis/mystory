@@ -15,7 +15,7 @@ models, Drive, the interface — is replaceable around them.
 
 ```bash
 npm install
-npm run dev        # Express + Vite middleware, :3000
+npm run dev        # Express + Vite middleware, :4747
 npm run lint       # tsc --noEmit
 npm run build      # client → dist/, server → dist/server.cjs
 npm run gemini:doctor   # what a Google key can actually do
