@@ -455,6 +455,12 @@ async function openaiChat(p: Provider, model: string, req: ChatRequest): Promise
     model,
     messages: [{ role: 'user', content: req.prompt }],
     temperature: req.temperature ?? 0.2,
+    // Sent explicitly, not left to the default. The OpenAI spec says stream
+    // defaults to false; OmniRoute streams when the field is absent (verified
+    // against a live instance, 3 Sep 2026 — omitting it returned
+    // text/event-stream, sending false returned application/json). Nothing
+    // here consumes a stream, so every provider is asked for a whole answer.
+    stream: false,
   };
   if (req.maxTokens) body.max_tokens = req.maxTokens;
   // Not every runtime implements JSON mode. Asked for, never depended on:
@@ -469,11 +475,85 @@ async function openaiChat(p: Provider, model: string, req: ChatRequest): Promise
   });
   if (!res.ok) throw new ProviderError(explain(res.status, await res.text(), p.label), res.status);
 
-  const data: any = await res.json();
+  // A gateway that streams despite being told not to should cost a reassembly,
+  // not the whole request. STANDARDS #11.
+  const raw = await res.text();
+  const data: any = looksLikeSSE(raw) ? joinSSE(raw, p.label) : parseJson(raw, p.label);
+
   if (data?.error) throw new ProviderError(data.error.message || 'Refused.', 0);
-  const text = data?.choices?.[0]?.message?.content;
-  if (!text) throw new ProviderError('The model returned nothing.', 0);
-  return text;
+
+  const choice = data?.choices?.[0];
+  const text = choice?.message?.content;
+  if (text) return text;
+
+  // Verified against OmniRoute on 3 Sep 2026: gemma-4-31b-it came back with
+  // finish_reason "length", content "", and all thirteen completion tokens
+  // accounted for under reasoning_content. The model had not failed — it spent
+  // its entire output budget thinking and never got to the answer. The same
+  // request also reported prompt_tokens 2124 for a six-word prompt, because a
+  // gateway can prepend a large preamble of its own.
+  const reasoning = choice?.message?.reasoning_content || choice?.message?.reasoning;
+  const finish = choice?.finish_reason;
+
+  if (reasoning && finish === 'length') {
+    throw new ProviderError(
+      `${model} is a reasoning model and used its whole output budget thinking, leaving no room for an answer. Give this job a larger budget, or assign it a non-reasoning model.`,
+      0,
+    );
+  }
+  if (finish === 'length') {
+    throw new ProviderError(`${model} was cut off before it produced anything. Its output budget is too small for this job.`, 0);
+  }
+  if (reasoning) {
+    throw new ProviderError(`${model} returned only its reasoning and no answer. A different model will usually do better here.`, 0);
+  }
+  if (finish === 'content_filter') {
+    throw new ProviderError(`${model} refused to answer on safety grounds. A different model will usually take it.`, 0);
+  }
+  throw new ProviderError(`${model} returned an empty answer${finish ? ` (finished as "${finish}")` : ''}.`, 0);
+}
+
+function parseJson(raw: string, label: string): any {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new ProviderError(
+      `${label} sent something that is not JSON: ${raw.slice(0, 120)}`,
+      0,
+    );
+  }
+}
+
+const looksLikeSSE = (raw: string) => /^\s*data:\s*/.test(raw);
+
+/** Reassembles an OpenAI-style SSE stream into the non-streaming shape, so the
+ *  caller cannot tell the difference. */
+function joinSSE(raw: string, label: string): any {
+  let text = '';
+  let seen = false;
+  for (const line of raw.split(/\r?\n/)) {
+    const m = line.match(/^\s*data:\s*(.*)$/);
+    if (!m) continue;
+    const payload = m[1].trim();
+    if (!payload || payload === '[DONE]') continue;
+    let frame: any;
+    try {
+      frame = JSON.parse(payload);
+    } catch {
+      continue; // A truncated final frame is not worth failing the request for.
+    }
+    if (frame?.error) throw new ProviderError(frame.error.message || 'Refused.', 0);
+    const choice = frame?.choices?.[0];
+    const piece = choice?.delta?.content ?? choice?.message?.content;
+    if (typeof piece === 'string') {
+      text += piece;
+      seen = true;
+    }
+  }
+  if (!seen) {
+    throw new ProviderError(`${label} streamed a response with no content in it.`, 0);
+  }
+  return { choices: [{ message: { content: text } }] };
 }
 
 async function geminiChat(p: Provider, model: string, req: ChatRequest): Promise<string> {

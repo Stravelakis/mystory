@@ -434,7 +434,11 @@ async function startServer() {
         task,
         prompt: 'Reply with the single word: ready',
         temperature: 0,
-        maxTokens: 16,
+        // Generous on purpose. 16 was enough for an ordinary model and far too
+        // little for a reasoning one, which spends its budget thinking first
+        // and then has nothing left to answer with — so the test failed on
+        // models that work perfectly well in the app.
+        maxTokens: 2048,
       });
       res.json({
         success: true,
