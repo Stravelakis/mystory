@@ -1,3 +1,24 @@
+/* =============================================================================
+   SERVER — every route, in one process.
+
+   Deliberately thin. This file decides what a request means and what to say
+   back; it does not decide how to reach a model, how an entry is stored, or
+   what a term means. Those live in providers.ts, vault.ts and vocabulary.ts,
+   and each of them is usable without this file.
+
+   Two ordering rules hold the interesting parts together:
+
+     - A recording reaches disk BEFORE any model is called, and an entry is
+       created to hold it. Everything after that point may fail without
+       costing the recording.
+     - Drive is last, always. A sync can fail; a memory may not.
+
+   Local-only routing is enforced here as well as in providers.ts: the
+   middleware below closes the Google and Drive routes outright. A privacy
+   setting honoured in only one of the two places is one fallback away from
+   leaking.
+   ========================================================================== */
+
 import express from 'express';
 import path from 'path';
 import { createServer } from 'http';

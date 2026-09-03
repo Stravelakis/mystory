@@ -295,6 +295,61 @@ and `deco-noir.js` are copies, and the identity survives without the script.
 - [`src/styles/mobile.css`](src/styles/mobile.css) holds the phone-only
   concerns and is loaded after the identity, so it can only ever adjust it
 
+## Setting it up with an agent
+
+If you use the Claude Chrome extension (or any agent that can drive a browser),
+this saves clicking through Settings by hand. Open My Story in a tab, open the
+extension, and paste this.
+
+It is written to be safe to hand to an agent: it never asks it to read, type or
+invent a credential, and it tells it to stop rather than improvise.
+
+```text
+You are looking at My Story, a private journalling app, open in this tab.
+Help me finish setting it up. Work only inside this tab.
+
+Never type or read an API key. Any key I have already set will show as a
+masked value like ***. Leave every masked field exactly as it is — retyping
+one replaces a working key with a broken one.
+
+Do this in order, and tell me what you see at each step:
+
+1. Go to the Settings tab.
+
+2. THE LOCK. If it says no passcode is set, stop and tell me. I will type the
+   passcode myself — do not invent one, and do not type into that field.
+
+3. MODELS → "Where models run". Tell me which of the three it is on. Leave it
+   alone unless I say otherwise. If it is on "Local only", say so, because
+   that switches Google Drive off and refuses every cloud provider.
+
+4. If I have told you an endpoint to use — a local runtime such as Ollama, or
+   a gateway — put it in the matching Endpoint field. Otherwise skip this.
+
+5. Press "Load models" and wait for it to finish. Then read back to me, for
+   each provider: its name, whether it answered, and how many models it found.
+   Quote any error exactly rather than summarising it.
+
+6. In "Which model does which job", tell me what each of the five jobs is set
+   to. If a job has no first choice, tell me what the dropdown offers and let
+   ME pick. Do not choose a model on my behalf: they differ in cost, speed and
+   whether they run on my own machine.
+
+7. Once I have confirmed the choices, press "Save".
+
+8. Press "Try it" on Indicators, Companion, Titles and Synthesis in turn.
+   Report exactly which provider and model answered each one. If any fails,
+   quote the whole message.
+
+Do not change anything I have not listed. Do not press Trash, Unlink, or
+anything under Google account. If something looks wrong, stop and ask me
+rather than fixing it yourself.
+```
+
+Transcription is the one thing that prompt cannot verify, because it needs real
+speech. Press **RECORD**, say a sentence, and stop — if the transcript comes
+back, the chain works.
+
 ## Documentation
 
 | | For |

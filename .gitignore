@@ -13,3 +13,6 @@ vault/
 
 # Session scratch, not project config.
 .claude/worktrees/
+
+# Personal setup notes: these name your own machines and gateways.
+*.local.md

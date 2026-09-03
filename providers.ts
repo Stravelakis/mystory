@@ -246,11 +246,15 @@ export function resolveProviders(config: Record<string, string>): Provider[] {
       local: false,
       baseUrl: 'https://api.groq.com/openai/v1',
       apiKey: config.GROQ_API_KEY,
+      // Verified against Groq's live /v1/models, 3 Sep 2026. The Llama models
+      // this used to default to are gone — Groq now serves gpt-oss and qwen for
+      // chat. This is the whole reason "Load models" exists: treat the names
+      // below as a stopgap for someone who has not pressed it yet.
       chat: {
-        indicators: ['llama-3.1-8b-instant'],
-        companion: ['llama-3.3-70b-versatile'],
-        title: ['llama-3.1-8b-instant'],
-        synthesis: ['llama-3.3-70b-versatile'],
+        indicators: ['openai/gpt-oss-20b'],
+        companion: ['openai/gpt-oss-120b'],
+        title: ['openai/gpt-oss-20b'],
+        synthesis: ['openai/gpt-oss-120b'],
       },
       stt: ['whisper-large-v3', 'whisper-large-v3-turbo'],
       canList: true,
@@ -265,11 +269,13 @@ export function resolveProviders(config: Record<string, string>): Provider[] {
       local: false,
       baseUrl: 'https://api.mistral.ai/v1',
       apiKey: config.MISTRAL_API_KEY,
+      // Verified 3 Sep 2026: mistral-large-latest no longer resolves;
+      // mistral-medium-latest is the current general model.
       chat: {
         indicators: ['mistral-small-latest'],
-        companion: ['mistral-large-latest'],
+        companion: ['mistral-medium-latest'],
         title: ['mistral-small-latest'],
-        synthesis: ['mistral-large-latest'],
+        synthesis: ['mistral-medium-latest'],
       },
       stt: [],
       canList: true,
