@@ -1,0 +1,139 @@
+/* =============================================================================
+   MOBILE — the vault on a phone.
+
+   Deco Noir's grids are already fluid (auto-fit / minmax), so this is not a
+   second layout. It is the handful of things a desktop stylesheet cannot know
+   about: a notch, a browser chrome bar that changes height while you scroll,
+   a thumb instead of a pointer, and Safari's habit of zooming the page when
+   you focus an input smaller than 16px.
+
+   The identity does not change on a small screen. The chamfer stays, the
+   colourway stays, the ornamental face stays.
+   ========================================================================== */
+
+/* The notch, and the home indicator. `env()` is zero everywhere it does not
+   apply, so this is unconditional. */
+.wrap {
+  padding-left: max(var(--pad), env(safe-area-inset-left));
+  padding-right: max(var(--pad), env(safe-area-inset-right));
+  padding-bottom: calc(5rem + env(safe-area-inset-bottom));
+}
+.controls-in {
+  padding-left: max(var(--pad), env(safe-area-inset-left));
+  padding-right: max(var(--pad), env(safe-area-inset-right));
+}
+
+/* 100vh on a phone is the height of the viewport with the browser chrome
+   hidden, which is not the height you can see. dvh is. */
+@supports (height: 100dvh) {
+  .fullheight,
+  main.wrap[style*='100vh'] {
+    min-height: 100dvh !important;
+  }
+}
+
+@media (max-width: 720px) {
+  /* Tabs scroll rather than wrap or squash. */
+  .tabs {
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tabs::-webkit-scrollbar {
+    display: none;
+  }
+  .tab {
+    flex: 0 0 auto;
+    padding: 0.8rem 0.9rem;
+  }
+
+  /* A thumb is about 44px wide. Anything you are meant to press is at least
+     that, including the ones drawn small on a desktop. */
+  .btn,
+  .tab,
+  .pickbtn,
+  .picker button {
+    min-height: 44px;
+  }
+  .btn.btn-sm,
+  .btn-sm {
+    min-height: 40px;
+  }
+
+  /* Safari zooms the whole page when a focused field is under 16px. It never
+     zooms back out on its own. */
+  input,
+  textarea,
+  select {
+    font-size: max(16px, var(--step-0));
+  }
+
+  /* The recording control is the one thing you reach for one-handed in the
+     dark. Give it the width. */
+  .record-row,
+  .record-row .btn {
+    width: 100%;
+  }
+
+  /* Long ids, Drive links and vault paths should wrap rather than push the
+     page sideways. */
+  .tile .v,
+  code {
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  /* Frame chrome costs about a third of the width on a 375px screen. */
+  .frame > .pbody,
+  .tile .pbody {
+    padding: 0.85rem 0.9rem;
+  }
+}
+
+/* A phone kept in a pocket is used in the dark more often than not, and the
+   drop shadows read as smudges at arm's length on an OLED panel. */
+@media (max-width: 720px) {
+  .frame.lit {
+    filter: none;
+  }
+}
+
+/* Installed to the home screen, there is no browser chrome to scroll away and
+   no rubber-band at the edges of the page. */
+@media (display-mode: standalone) {
+  body {
+    overscroll-behavior-y: none;
+  }
+}
+
+/* -----------------------------------------------------------------------------
+   Two-column splits — the Vault beside its entries, Synthesis beside its
+   sources. These used to be inline `gridTemplateColumns`, which no stylesheet
+   can override, so on a phone the writing column was squeezed to about 140px
+   and the placeholder text ran vertically down it. Defined here instead, so
+   they can collapse.
+   -------------------------------------------------------------------------- */
+.split {
+  display: grid;
+  gap: var(--gap);
+  align-items: start;
+}
+.split-wide {
+  grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+}
+.split-narrow {
+  grid-template-columns: minmax(280px, 1fr) minmax(0, 2fr);
+}
+
+@media (max-width: 900px) {
+  .split-wide,
+  .split-narrow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* Stacked, the writing surface comes first and the panels follow it. The
+     Synthesis view is authored the other way round, so its source list is
+     ordered back above the draft. */
+  .split-narrow > *:first-child {
+    order: -1;
+  }
+}

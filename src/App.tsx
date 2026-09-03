@@ -1,489 +1,1140 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Settings, Mic, BookOpen, Save, Play, StopCircle, RefreshCw, UploadCloud, Check, AlertCircle, FileText, ExternalLink, Moon } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Settings, Mic, BookOpen, Save, StopCircle, RefreshCw, UploadCloud, FileText, ExternalLink } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { googleSignIn, googleSignOut, auth } from './firebase';
-import { onAuthStateChanged } from 'firebase/auth';
+
+/* =============================================================================
+   DECO NOIR PRIMITIVES
+   A clipped box cannot carry a border or a box-shadow — both get sheared off at
+   the chamfer — which is why a panel is three nested layers and not one.
+   ========================================================================== */
+
+function Frame({
+  title,
+  headRight,
+  children,
+  className = '',
+  lit = false,
+}: {
+  title?: string;
+  headRight?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+  lit?: boolean;
+}) {
+  return (
+    <div className={`frame cut ${lit ? 'lit' : ''} ${className}`}>
+      <span className="plate tl" />
+      <span className="plate br" />
+      <div className="bevel cut">
+        <div className="face cut">
+          {title && (
+            <div className="phead">
+              <span className="dmd" />
+              <h3>{title}</h3>
+              <span className="spacer" />
+              {headRight}
+            </div>
+          )}
+          <div className="pbody">{children}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface PickerOption {
+  value: string;
+  label: string;
+}
+interface PickerGroup {
+  label?: string;
+  options: PickerOption[];
+}
+
+/* A native <select> cannot be chamfered, so the picker is a listbox. */
+function Picker({
+  value,
+  onChange,
+  groups,
+  id,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  groups: PickerGroup[];
+  id?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const current = groups.flatMap(g => g.options).find(o => o.value === value);
+
+  return (
+    <div className="picker" ref={ref}>
+      <button
+        type="button"
+        id={id}
+        className="picktrigger cut-sm"
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        onClick={() => setOpen(o => !o)}
+      >
+        <span className="truncate text-left">{current ? current.label : 'Select…'}</span>
+        <span className="chev" />
+      </button>
+      <div className="picklist cut-sm max-h-72 overflow-y-auto" hidden={!open} role="listbox">
+        {groups.map((g, i) => (
+          <React.Fragment key={g.label || i}>
+            {g.label && <div className="clabel px-3 pt-3 pb-1">{g.label}</div>}
+            {g.options.map(o => (
+              <button
+                key={o.value}
+                type="button"
+                role="option"
+                className="pickopt"
+                aria-selected={o.value === value}
+                onClick={() => {
+                  onChange(o.value);
+                  setOpen(false);
+                }}
+              >
+                {o.label}
+              </button>
+            ))}
+          </React.Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  hint,
+  type = 'text',
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  hint?: string;
+  type?: string;
+  placeholder?: string;
+}) {
+  return (
+    <div className="field">
+      <label>{label}</label>
+      <span className="inwrap cut-sm">
+        <input
+          className="input"
+          type={type}
+          value={value}
+          placeholder={placeholder}
+          onChange={e => onChange(e.target.value)}
+        />
+      </span>
+      {hint && <span className="fhint">{hint}</span>}
+    </div>
+  );
+}
+
+function SectionHead({ title, note, right }: { title: string; note?: string; right?: React.ReactNode }) {
+  return (
+    <div className="mb-6">
+      <div className="sechead">
+        <h2>{title}</h2>
+        <span className="rule" />
+        {right}
+      </div>
+      {note && <p className="sec-note">{note}</p>}
+    </div>
+  );
+}
+
+/* =============================================================================
+   LOCK SCREEN
+   ========================================================================== */
+
+function LockScreen({ onUnlocked }: { onUnlocked: () => void }) {
+  const [passcode, setPasscode] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const unlock = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!passcode) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/auth/unlock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passcode }),
+      });
+      const data = await res.json();
+      if (data.success) onUnlocked();
+      else setError(data.error || 'That did not work.');
+    } catch (err: any) {
+      setError(err.message || 'Could not reach the vault.');
+    } finally {
+      setBusy(false);
+      setPasscode('');
+    }
+  };
+
+  return (
+    <main className="wrap" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>
+      <div style={{ width: 'min(420px, 100%)' }}>
+        <div className="masthead">
+          <div className="mast-in">
+            <span className="decomark">
+              <span className="ring" />
+              <span className="bar" />
+              <span className="dia" />
+            </span>
+            <span className="wordmark">
+              <h1>My Story</h1>
+              <p>Silent Vault</p>
+            </span>
+          </div>
+        </div>
+
+        <Frame title="Locked" lit>
+          <form onSubmit={unlock}>
+            <div className="field">
+              <label htmlFor="passcode">Passcode</label>
+              <span className="inwrap cut-sm">
+                <input
+                  id="passcode"
+                  className="input"
+                  type="password"
+                  autoFocus
+                  autoComplete="current-password"
+                  value={passcode}
+                  onChange={e => setPasscode(e.target.value)}
+                />
+              </span>
+            </div>
+            {error && (
+              <div className="callout crit">
+                <span className="cd" />
+                <span>{error}</span>
+              </div>
+            )}
+            <button className="btn btn-lg btn-primary cut-sm w-full" type="submit" disabled={busy || !passcode}>
+              {busy ? 'Opening…' : 'Unlock'}
+            </button>
+          </form>
+        </Frame>
+      </div>
+    </main>
+  );
+}
+
+/* =============================================================================
+   APP
+   ========================================================================== */
+
+type Tab = 'journal' | 'synthesis' | 'settings';
+
+interface GoogleStatus {
+  /** A refresh token is stored, so archiving will keep working indefinitely. */
+  connected: boolean;
+  email: string;
+  /** An OAuth client id and secret have been entered. */
+  configured: boolean;
+}
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'journal' | 'synthesis' | 'settings'>('journal');
-  const [googleToken, setGoogleToken] = useState<string | null>(null);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
+  // ?tab=synthesis deep-links a surface, which is handy on a headless box you
+  // only ever reach by URL.
+  const [activeTab, setActiveTab] = useState<Tab>(() => {
+    const t = new URLSearchParams(window.location.search).get('tab');
+    return t === 'synthesis' || t === 'settings' ? t : 'journal';
+  });
+  const [google, setGoogle] = useState<GoogleStatus>({ connected: false, email: '', configured: false });
+  const [gate, setGate] = useState<{ locked: boolean; authed: boolean } | null>(null);
 
-  // Monitor Firebase Auth state change to gracefully preserve sessions
+  const readGate = async () => {
+    try {
+      const res = await fetch('/api/auth/status');
+      const data = await res.json();
+      setGate({ locked: Boolean(data.locked), authed: Boolean(data.authed) });
+    } catch (e) {
+      // If the status endpoint cannot be reached there is nothing to show
+      // anyway; treat it as open rather than stranding the user on a lock
+      // screen they cannot pass.
+      setGate({ locked: false, authed: true });
+    }
+  };
+
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        setUserEmail(user.email);
-      } else {
-        setUserEmail(null);
-        setGoogleToken(null);
-      }
-    });
-    return () => unsubscribe();
+    void readGate();
   }, []);
 
   const [alertMessage, setAlertMessage] = useState<{ message: string; type: 'info' | 'error' | 'success' } | null>(null);
 
   const triggerAlert = (message: string, type: 'info' | 'error' | 'success' = 'info') => {
     setAlertMessage({ message, type });
-    setTimeout(() => {
-      setAlertMessage(null);
-    }, 5000);
+    setTimeout(() => setAlertMessage(null), 5000);
   };
+
+  // The server holds the Google credential; the client only ever asks whether
+  // one exists.
+  const readGoogle = async () => {
+    try {
+      const data = await (await fetch('/api/google/status')).json();
+      setGoogle({
+        connected: Boolean(data.connected),
+        email: data.email || '',
+        configured: Boolean(data.configured),
+      });
+    } catch (e) {
+      setGoogle({ connected: false, email: '', configured: false });
+    }
+  };
+
+  useEffect(() => {
+    if (gate && (!gate.locked || gate.authed)) void readGoogle();
+  }, [gate]);
 
   const handleLinkGoogle = async () => {
     try {
-      const { user, accessToken, email } = await googleSignIn();
-      if (accessToken) {
-        setGoogleToken(accessToken);
-        setUserEmail(email || 'Connected Google Account');
-        triggerAlert("Successfully linked with Google Drive!", "success");
-      }
+      const data = await (await fetch('/api/google/url')).json();
+      if (!data.success) return triggerAlert(data.error || 'Could not start linking.', 'error');
+
+      const popup = window.open(data.url, 'google-link', 'width=520,height=680');
+      if (!popup) return triggerAlert('The browser blocked the linking window.', 'error');
+
+      // The callback page posts back to this origin when it is done.
+      const onMessage = (e: MessageEvent) => {
+        if (e.origin !== window.location.origin || e.data?.type !== 'GOOGLE_LINK_DONE') return;
+        window.removeEventListener('message', onMessage);
+        void readGoogle().then(() => {
+          if (e.data.ok) triggerAlert('Google account linked.', 'success');
+        });
+      };
+      window.addEventListener('message', onMessage);
+
+      // A popup closed by hand sends nothing, so re-read the status either way.
+      const poll = setInterval(() => {
+        if (popup.closed) {
+          clearInterval(poll);
+          window.removeEventListener('message', onMessage);
+          void readGoogle();
+        }
+      }, 700);
     } catch (err: any) {
-      if (err?.code === 'auth/popup-closed-by-user' || err?.message?.includes('popup-closed-by-user')) {
-        triggerAlert("Linkage cancelled: The login popup was closed.", "info");
-      } else {
-        triggerAlert("Google linking failed: " + (err.message || err), "error");
-      }
+      triggerAlert('Google linking failed: ' + (err.message || err), 'error');
     }
   };
 
   const handleDisconnect = async () => {
     try {
-      await googleSignOut();
-      setGoogleToken(null);
-      setUserEmail(null);
+      await fetch('/api/google/disconnect', { method: 'POST' });
+      await readGoogle();
+      triggerAlert('Google account unlinked.', 'info');
     } catch (err: any) {
-      console.error("Disconnect error:", err);
+      console.error('Disconnect error:', err);
     }
   };
 
-  return (
-    <div className="min-h-screen bg-[#141412] text-[#C5BDB0] font-serif selection:bg-[#3D2222] selection:text-[#EAE5DB]">
-      {/* Toast Notification */}
-      <AnimatePresence>
-        {alertMessage && (
-          <motion.div
-            initial={{ opacity: 0, y: -20, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -20, scale: 0.95 }}
-            className="fixed top-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3 border rounded shadow-2xl font-sans text-xs tracking-wider uppercase"
-            style={{
-              backgroundColor: alertMessage.type === 'error' ? '#211414' : alertMessage.type === 'success' ? '#142114' : '#1C1C1A',
-              borderColor: alertMessage.type === 'error' ? '#802829' : alertMessage.type === 'success' ? '#288029' : '#2D2D2A',
-              color: alertMessage.type === 'error' ? '#E98080' : alertMessage.type === 'success' ? '#80E980' : '#C5BDB0',
-            }}
-          >
-            {alertMessage.type === 'error' && <AlertCircle className="w-4 h-4 text-[#802829]" />}
-            {alertMessage.type === 'success' && <Check className="w-4 h-4 text-[#288029]" />}
-            <span>{alertMessage.message}</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
+  const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
+    { id: 'journal', label: 'Vault', icon: <Mic className="w-4 h-4" /> },
+    { id: 'synthesis', label: 'Synthesis', icon: <RefreshCw className="w-4 h-4" /> },
+    { id: 'settings', label: 'Settings', icon: <Settings className="w-4 h-4" /> },
+  ];
 
-      {/* Upper Navigation Header */}
-      <nav className="border-b border-[#2D2D2A] bg-[#0E0E0D] sticky top-0 z-10">
-        <div className="max-w-5xl mx-auto px-6 h-20 flex items-center justify-between">
-          <h1 className="text-2xl tracking-tight text-[#802829] flex items-center gap-3 font-serif">
-            <BookOpen className="w-6 h-6 text-[#802829]" />
-            <span>My Story</span>
-          </h1>
-          <div className="flex space-x-2">
-            <NavButton active={activeTab === 'journal'} onClick={() => setActiveTab('journal')} icon={<Mic className="w-4 h-4" />}>
-              Vault
-            </NavButton>
-            <NavButton active={activeTab === 'synthesis'} onClick={() => setActiveTab('synthesis')} icon={<RefreshCw className="w-4 h-4" />}>
-              Synthesis
-            </NavButton>
-            <NavButton active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon={<Settings className="w-4 h-4" />}>
-              Settings
-            </NavButton>
+  // Nothing renders until we know whether the vault is locked — a flash of the
+  // journal before the lock screen would defeat the point of it.
+  if (!gate) return null;
+  if (gate.locked && !gate.authed) return <LockScreen onUnlocked={() => setGate({ locked: true, authed: true })} />;
+
+  return (
+    <>
+      {/* Toast. .toaststack is absolute by default; fixed keeps it on screen
+          while the page scrolls. */}
+      <div className="toaststack" style={{ position: 'fixed' }}>
+        <AnimatePresence>
+          {alertMessage && (
+            <motion.div
+              initial={{ opacity: 0, y: -14 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -14 }}
+            >
+              <div className="frame toast cut">
+                <span className="plate tl" />
+                <span className="plate br" />
+                <div className="bevel cut">
+                  <div className="face cut">
+                    <div className="pbody flex items-center gap-3">
+                      <span
+                        className={
+                          alertMessage.type === 'error'
+                            ? 'tag crit'
+                            : alertMessage.type === 'success'
+                              ? 'tag good'
+                              : 'tag'
+                        }
+                      >
+                        {alertMessage.type !== 'info' && <i />}
+                        {alertMessage.type === 'error' ? 'Fault' : alertMessage.type === 'success' ? 'Done' : 'Note'}
+                      </span>
+                      <span>{alertMessage.message}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* Sticky control bar: wordmark + tabs */}
+      <div className="controls">
+        <div className="controls-in">
+          <div className="flex items-center gap-3">
+            <span className="decomark">
+              <span className="ring" />
+              <span className="bar" />
+              <span className="dia" />
+            </span>
+            <span className="wordmark text-left">
+              <h1 style={{ fontSize: 'var(--step-1)' }}>My Story</h1>
+            </span>
+          </div>
+          <span className="flex-1" />
+          <div className="tabs" role="tablist">
+            {tabs.map(t => (
+              <button
+                key={t.id}
+                role="tab"
+                className="tab flex items-center gap-2"
+                aria-selected={activeTab === t.id}
+                onClick={() => setActiveTab(t.id)}
+              >
+                {t.icon}
+                <span>{t.label}</span>
+              </button>
+            ))}
           </div>
         </div>
-      </nav>
+      </div>
 
-      {/* Main Container */}
-      <main className="max-w-5xl mx-auto px-6 py-10">
+      <main className="wrap">
         <AnimatePresence mode="wait">
           {activeTab === 'journal' && (
-            <JournalRoom 
-              key="journal" 
-              googleToken={googleToken} 
-              userEmail={userEmail}
+            <JournalRoom
+              key="journal"
+              google={google}
               onLinkGoogle={handleLinkGoogle}
-              onDisconnect={handleDisconnect}
               triggerAlert={triggerAlert}
             />
           )}
-          {activeTab === 'synthesis' && (
-            <SynthesisStudio 
-              key="synthesis" 
-              googleToken={googleToken} 
-            />
-          )}
+          {activeTab === 'synthesis' && <SynthesisStudio key="synthesis" google={google} />}
           {activeTab === 'settings' && (
-            <SettingsCenter 
-              key="settings" 
-              googleToken={googleToken} 
-              userEmail={userEmail}
+            <SettingsCenter
+              key="settings"
+              google={google}
               onLinkGoogle={handleLinkGoogle}
               onDisconnect={handleDisconnect}
-              triggerAlert={triggerAlert}
+              onGoogleChanged={readGoogle}
             />
           )}
         </AnimatePresence>
       </main>
-    </div>
+    </>
   );
 }
 
-function NavButton({ active, onClick, icon, children }: any) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex items-center gap-2 px-4 py-2 rounded font-sans text-[11px] uppercase tracking-widest transition-all duration-300 ${
-        active 
-          ? 'bg-[#211414] text-[#802829] border border-[#802829]/40' 
-          : 'text-[#8B8B7A] hover:text-[#C5BDB0] hover:bg-[#1E1E1C]'
-      }`}
-    >
-      {icon}
-      <span>{children}</span>
-    </button>
-  );
+/* =============================================================================
+   VAULT
+   ========================================================================== */
+
+const DRAFT_KEY = 'mystory.draft';
+/** Below this, a stray keystroke is not worth a file of its own. */
+const DRAFT_MIN_CHARS = 40;
+
+interface VaultEntry {
+  id: string;
+  title: string;
+  created: string;
+  updated: string;
+  indicators: string[];
+  audio?: string;
+  drive?: string;
+  text: string;
 }
+interface Indicator {
+  id: string;
+  label: string;
+  category: 'pattern' | 'role' | 'response' | 'protection';
+  definition: string;
+  evidence?: string;
+}
+
+/** Grouping headings. A coping response filed next to a tactic done to you is
+ *  a category error, and reads like an accusation. */
+const CATEGORY_LABEL: Record<Indicator['category'], string> = {
+  pattern: 'Done to me',
+  role: 'Position in the system',
+  response: 'How I survived it',
+  protection: 'What protected me',
+};
+const CATEGORY_ORDER: Indicator['category'][] = ['pattern', 'role', 'response', 'protection'];
+
+interface VaultSummary extends Omit<VaultEntry, 'text'> {
+  excerpt: string;
+  words: number;
+}
+
+const shortDate = (iso: string) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: '2-digit' });
+};
+const shortTime = (iso: string) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? '' : d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+};
 
 interface JournalRoomProps {
-  googleToken: string | null;
-  userEmail: string | null;
-  onLinkGoogle: () => any;
-  onDisconnect: () => any;
-  triggerAlert: (msg: string, type?: 'info' | 'error' | 'success') => void;
   key?: string;
+  google: GoogleStatus;
+  onLinkGoogle: () => any;
+  triggerAlert: (msg: string, type?: 'info' | 'error' | 'success') => void;
 }
 
-function JournalRoom({ googleToken, userEmail, onLinkGoogle, onDisconnect, triggerAlert }: JournalRoomProps) {
+interface ProviderInfo {
+  id: string;
+  label: string;
+  local: boolean;
+  kind: string;
+  baseUrl: string;
+  reachable: boolean | null;
+  models: string[];
+  error?: string;
+  blocked?: boolean;
+}
+interface TaskInfo {
+  id: string;
+  label: string;
+  blurb: string;
+}
+interface ProvidersState {
+  routing: string;
+  localOnly: boolean;
+  providers: ProviderInfo[];
+  loaded: boolean;
+  tasks: TaskInfo[];
+  assignments: Record<string, { providerId: string; model: string }[]>;
+  synthesis: { label: string; local: boolean; options: { value: string; label: string }[] }[];
+}
+
+const NO_PROVIDERS: ProvidersState = {
+  routing: 'cloud-first',
+  localOnly: false,
+  providers: [],
+  loaded: false,
+  tasks: [],
+  assignments: {},
+  synthesis: [],
+};
+
+/** Which models exist is a question for the endpoint, never a list baked into
+ *  this bundle — providers rename and retire them faster than this app ships,
+ *  and a hardcoded id becomes the user's 404. `load` asks them. */
+function useProviders(): [ProvidersState, (load?: boolean) => Promise<void>, boolean] {
+  const [state, setState] = useState<ProvidersState>(NO_PROVIDERS);
+  const [loading, setLoading] = useState(false);
+  const load = useCallback(async (deep = false) => {
+    if (deep) setLoading(true);
+    try {
+      const r = await fetch(`/api/providers${deep ? '?load=1' : ''}`);
+      const d = await r.json();
+      if (d.success) setState(d);
+    } catch {
+      // Settings still has to render. The panel says what is unreachable.
+    } finally {
+      if (deep) setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    void load(false);
+  }, [load]);
+  return [state, load, loading];
+}
+
+/** Transcription engines that are actually configured, plus Auto. */
+function engineGroups(p: ProvidersState): PickerGroup[] {
+  const stt = p.providers.filter(
+    x => x.id === 'groq' || x.id === 'gemini' || x.id === 'local-stt' || x.id === 'omniroute',
+  );
+  const label: Record<string, string> = {
+    groq: 'Groq Whisper large v3',
+    gemini: 'Gemini native audio',
+    'local-stt': 'Local Whisper',
+    omniroute: 'OmniRoute (returns English)',
+  };
+  return [
+    {
+      options: [
+        { value: 'auto', label: stt.length ? 'Auto — first that answers' : 'Auto — nothing configured' },
+        ...stt.map(x => ({ value: x.id, label: label[x.id] || x.label })),
+      ],
+    },
+  ];
+}
+
+const LANGUAGES: PickerGroup[] = [
+  {
+    options: [
+      { value: 'auto', label: 'Auto (detect)' },
+      { value: 'el', label: 'Greek' },
+      { value: 'en', label: 'English' },
+    ],
+  },
+];
+
+function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [sessionName, setSessionName] = useState('');
   const [language, setLanguage] = useState('auto');
-  const [model, setModel] = useState('gemini-2.5-flash-audio');
+  const [engine, setEngine] = useState('auto');
   const [detectedTags, setDetectedTags] = useState<string[]>([]);
+  const [detectedIndicators, setDetectedIndicators] = useState<Indicator[]>([]);
+  const [providers] = useProviders();
   const [aiResponse, setAiResponse] = useState('');
   const [isArchiving, setIsArchiving] = useState(false);
   const [archiveLink, setArchiveLink] = useState<string | null>(null);
   const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [wsReady, setWsReady] = useState(false);
+
+  // Local vault
+  const [entryId, setEntryId] = useState<string | null>(null);
+  const [entries, setEntries] = useState<VaultSummary[]>([]);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [recovered, setRecovered] = useState(false);
+  const lastSavedRef = useRef('');
 
   const recognitionRef = useRef<any>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
 
-  // Debounced real-time Gemini Therapy-Speak Tagging
+  // MediaRecorder.onstop fires from a closure captured when recording started,
+  // so anything it reads must come from a ref or it reads a stale render.
+  const sessionNameRef = useRef(sessionName);
+  const tagsRef = useRef(detectedTags);
+  const connectedRef = useRef(google.connected);
+  const engineRef = useRef(engine);
+  const languageRef = useRef(language);
+  useEffect(() => {
+    sessionNameRef.current = sessionName;
+  }, [sessionName]);
+  useEffect(() => {
+    tagsRef.current = detectedTags;
+  }, [detectedTags]);
+  useEffect(() => {
+    connectedRef.current = google.connected;
+  }, [google.connected]);
+  useEffect(() => {
+    engineRef.current = engine;
+  }, [engine]);
+  useEffect(() => {
+    languageRef.current = language;
+  }, [language]);
+
+  const refreshEntries = async () => {
+    try {
+      const res = await fetch('/api/vault/entries');
+      const data = await res.json();
+      if (data.success) setEntries(data.entries || []);
+    } catch (e) {
+      console.error('Could not read the vault:', e);
+    }
+  };
+
+  const signature = () => JSON.stringify([entryId, sessionName, transcript, detectedTags]);
+
+  /** Writes the entry to disk on this machine. Everything else — Drive, models
+   *  — is downstream of this having already happened. */
+  const persist = async (extra: { drive?: string } = {}) => {
+    if (!transcript.trim() && !entryId) return null;
+    const sig = signature();
+    try {
+      const res = await fetch('/api/vault/entries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: entryId ?? undefined,
+          title: sessionName || undefined,
+          text: transcript,
+          indicators: detectedTags,
+          ...extra,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'The vault refused the write.');
+      lastSavedRef.current = sig;
+      setEntryId(data.entry.id);
+      setSavedAt(data.entry.updated);
+      void refreshEntries();
+      return data.entry as VaultEntry;
+    } catch (e: any) {
+      console.error('Vault save failed:', e);
+      triggerAlert('Could not write to the vault: ' + (e.message || e), 'error');
+      return null;
+    }
+  };
+
+  useEffect(() => {
+    void refreshEntries();
+  }, []);
+
+  // Draft recovery. localStorage is the belt to the vault's braces: it survives
+  // a reload of a half-typed entry that is not yet worth a file.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      if (typeof d?.text === 'string' && d.text.trim()) {
+        setTranscript(d.text);
+        setSessionName(d.title || '');
+        setEntryId(d.entryId || null);
+        setRecovered(true);
+      }
+    } catch (e) {
+      /* a corrupt draft is not worth failing a page load over */
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        if (transcript.trim()) {
+          localStorage.setItem(DRAFT_KEY, JSON.stringify({ entryId, title: sessionName, text: transcript }));
+        } else {
+          localStorage.removeItem(DRAFT_KEY);
+        }
+      } catch (e) {
+        /* private mode, quota — the vault is the real safety net */
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [transcript, sessionName, entryId]);
+
+  // Autosave to the vault once the text is worth a file and has been still for
+  // a moment. An entry that already exists keeps being updated regardless.
+  useEffect(() => {
+    if (isRecording) return; // the recorder saves on stop
+    if (!entryId && transcript.trim().length < DRAFT_MIN_CHARS) return;
+    if (signature() === lastSavedRef.current) return;
+    const timer = setTimeout(() => void persist(), 4000);
+    return () => clearTimeout(timer);
+  }, [transcript, sessionName, detectedTags, entryId, isRecording]);
+
+  const openEntry = async (id: string) => {
+    try {
+      const res = await fetch(`/api/vault/entries/${id}`);
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+      const e: VaultEntry = data.entry;
+      setEntryId(e.id);
+      setSessionName(e.title === 'Untitled' || e.title === 'Untitled recording' ? '' : e.title);
+      setTranscript(e.text);
+      setDetectedTags(e.indicators || []);
+      setArchiveLink(e.drive || null);
+      setArchiveError(null);
+      setAiResponse('');
+      setSavedAt(e.updated);
+      setRecovered(false);
+      lastSavedRef.current = '';
+    } catch (e: any) {
+      triggerAlert('Could not open that entry: ' + (e.message || e), 'error');
+    }
+  };
+
+  const newEntry = () => {
+    setEntryId(null);
+    setSessionName('');
+    setTranscript('');
+    setDetectedTags([]);
+    setArchiveLink(null);
+    setArchiveError(null);
+    setAiResponse('');
+    setSavedAt(null);
+    setRecovered(false);
+    lastSavedRef.current = '';
+    try {
+      localStorage.removeItem(DRAFT_KEY);
+    } catch (e) {}
+  };
+
+  const trashEntry = async (id: string) => {
+    try {
+      await fetch(`/api/vault/entries/${id}/trash`, { method: 'POST' });
+      if (id === entryId) newEntry();
+      void refreshEntries();
+      triggerAlert('Moved to the vault trash. The file is still on disk.', 'info');
+    } catch (e: any) {
+      triggerAlert('Could not move that entry: ' + (e.message || e), 'error');
+    }
+  };
+
+  // Debounced live tagging
   useEffect(() => {
     if (!transcript.trim() || transcript.length < 10) {
       setDetectedTags([]);
+      setDetectedIndicators([]);
       return;
     }
-
     const timer = setTimeout(async () => {
       try {
         const res = await fetch('/api/journal/analyze-tags', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ transcript })
+          body: JSON.stringify({ transcript }),
         });
         const data = await res.json();
-        if (data.tags && data.tags.length > 0) {
-          setDetectedTags(data.tags);
-        }
+        if (data.tags && data.tags.length > 0) setDetectedTags(data.tags);
+        if (Array.isArray(data.indicators)) setDetectedIndicators(data.indicators);
       } catch (e) {
-        console.error("Failed to fetch therapy tags:", e);
+        console.error('Failed to fetch indicators:', e);
       }
     }, 1500);
-
     return () => clearTimeout(timer);
   }, [transcript]);
 
-  // Connect backend WebSocket for live chat opinion triggers
+  // Companion socket, with reconnect — a silently dead socket used to leave both
+  // companion keys doing nothing at all.
   useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    wsRef.current = new WebSocket(`${protocol}//${window.location.host}/ws/journal`);
-    
-    wsRef.current.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'audio_response') {
-          setAiResponse(data.text);
+    let closed = false;
+    let retry: ReturnType<typeof setTimeout>;
+
+    const connect = () => {
+      if (closed) return;
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${protocol}//${window.location.host}/ws/journal`);
+      wsRef.current = ws;
+      // A superseded socket must not speak for the live one. Its close event can
+      // land after the replacement is already open.
+      const isCurrent = () => wsRef.current === ws;
+      ws.onopen = () => {
+        if (isCurrent()) setWsReady(true);
+      };
+      ws.onclose = () => {
+        if (!isCurrent()) return;
+        setWsReady(false);
+        if (!closed) retry = setTimeout(connect, 2000);
+      };
+      ws.onmessage = event => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'audio_response') setAiResponse(data.text);
+        } catch (e) {
+          console.error('WS parsing error:', e);
         }
-      } catch (e) {
-        console.error("WS parsing error:", e);
-      }
+      };
     };
-    
+    connect();
+
     return () => {
+      closed = true;
+      clearTimeout(retry);
       wsRef.current?.close();
     };
   }, []);
 
-  // Web Speech API + Robust MediaRecorder Gemini Audio Transcription pipeline
+  const stopStream = () => {
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+  };
+
   const toggleRecording = async () => {
     if (isRecording) {
       setIsRecording(false);
-      
-      // 1. Stop SpeechRecognition
       if (recognitionRef.current) {
         try {
           recognitionRef.current.stop();
         } catch (e) {}
       }
-
-      // 2. Stop MediaRecorder to trigger transcription
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
       }
-    } else {
-      try {
-        // Request microphone permission and initialize audio stream
-        await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch (err) {
-        console.error("Microphone permission error:", err);
-        triggerAlert("Microphone permission is blocked. Click the 'Open in new tab' button at the top right of your preview pane so the browser can prompt for microphone permissions directly.", "error");
-        return;
-      }
+      return;
+    }
 
-      setIsRecording(true);
-      setTranscript("Recording started... Speak now. Greek & English are fully supported.");
-      audioChunksRef.current = [];
+    // ONE stream. Asking twice left the first one open, so the microphone stayed
+    // lit after recording had stopped.
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+    } catch (err) {
+      console.error('Microphone permission error:', err);
+      triggerAlert(
+        'Microphone blocked. Open the app in its own browser tab so it can ask for permission.',
+        'error',
+      );
+      return;
+    }
 
-      // A. Setup Speech Recognition for fast interim text on screen
-      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      if (SpeechRecognition) {
-        recognitionRef.current = new SpeechRecognition();
-        recognitionRef.current.continuous = true;
-        recognitionRef.current.interimResults = true;
-        
-        if (language !== 'auto') {
-          recognitionRef.current.lang = language === 'el' ? 'el-GR' : 'en-US';
+    setIsRecording(true);
+    setTranscript('');
+    setArchiveLink(null);
+    setArchiveError(null);
+    audioChunksRef.current = [];
+
+    // A. Web Speech API — fast interim text on screen
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = true;
+      recognitionRef.current.interimResults = true;
+      if (language !== 'auto') recognitionRef.current.lang = language === 'el' ? 'el-GR' : 'en-US';
+
+      recognitionRef.current.onresult = (event: any) => {
+        let finalResult = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) finalResult += event.results[i][0].transcript;
         }
+        if (finalResult) {
+          setTranscript(prev => {
+            const cleanedPrev = prev.trim();
+            const cleanedNew = finalResult.trim();
+            if (cleanedPrev.endsWith(cleanedNew)) return prev;
+            return cleanedPrev ? cleanedPrev + ' ' + cleanedNew : cleanedNew;
+          });
+        }
+      };
+      recognitionRef.current.onerror = (e: any) => console.error('Speech Recognition Error:', e.error);
+      try {
+        recognitionRef.current.start();
+      } catch (e) {
+        console.error('SpeechRecognition start error:', e);
+      }
+    }
 
-        recognitionRef.current.onresult = (event: any) => {
-          let finalResult = '';
-          for (let i = event.resultIndex; i < event.results.length; ++i) {
-            if (event.results[i].isFinal) {
-              finalResult += event.results[i][0].transcript;
-            }
-          }
-          if (finalResult) {
-            setTranscript(prev => {
-              if (prev.startsWith("Recording started...") || prev.startsWith("Processing high-quality transcription")) {
-                return finalResult.trim();
-              }
-              const cleanedPrev = prev.trim();
-              const cleanedNew = finalResult.trim();
-              if (cleanedPrev.endsWith(cleanedNew)) return prev;
-              return cleanedPrev ? cleanedPrev + ' ' + cleanedNew : cleanedNew;
-            });
-          }
-        };
+    // B. MediaRecorder — the high-quality pass that actually gets transcribed
+    try {
+      // Safari on iOS records MP4 and nothing else; Chrome and Firefox
+      // prefer WebM/Opus. Asking for a container the device cannot produce
+      // throws, and hardcoding one it did not produce mislabels the file — so
+      // the device is asked what it can do and the answer is carried through
+      // to the upload.
+      const preferred = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4;codecs=mp4a.40.2',
+        'audio/mp4',
+        'audio/ogg;codecs=opus',
+      ];
+      const supported =
+        typeof MediaRecorder.isTypeSupported === 'function'
+          ? preferred.find(t => MediaRecorder.isTypeSupported(t))
+          : undefined;
 
-        recognitionRef.current.onerror = (e: any) => {
-          console.error("Speech Recognition Error:", e.error);
-        };
+      const mediaRecorder = supported ? new MediaRecorder(stream, { mimeType: supported }) : new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = event => {
+        if (event.data && event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+
+      mediaRecorder.onstop = async () => {
+        // The recorder is the authority on what it just produced.
+        const recordedType = mediaRecorder.mimeType || supported || 'audio/webm';
+        const audioBlob = new Blob(audioChunksRef.current, { type: recordedType });
+        stopStream();
+        if (audioBlob.size <= 1000) return;
+
+        setTranscript(prev => prev || 'Transcribing…');
+        // Text fields before the file: that is the order multer expects.
+        const formData = new FormData();
+        formData.append('engine', engineRef.current);
+        formData.append('language', languageRef.current);
+        const ext = recordedType.includes('mp4') ? 'm4a' : recordedType.includes('ogg') ? 'ogg' : 'webm';
+        formData.append('audio', audioBlob, `recording.${ext}`);
 
         try {
-          recognitionRef.current.start();
-        } catch (e) {
-          console.error("SpeechRecognition start error:", e);
+          const res = await fetch('/api/journal/transcribe-audio', { method: 'POST', body: formData });
+          const data = await res.json();
+          // The server has already written the recording and an entry to hold
+          // it, so adopt that id whether or not the transcription worked.
+          if (data.entryId) setEntryId(data.entryId);
+          if (data.success && data.transcript) {
+            setTranscript(data.transcript);
+            setSavedAt(data.entry?.updated || new Date().toISOString());
+            await handleAutoArchive(data.transcript, data.entryId);
+          } else {
+            triggerAlert(
+              (data.error || 'Transcription failed.') +
+                (data.audioKept ? ' The recording itself is safe in the vault.' : ''),
+              'error',
+            );
+            setTranscript(prev => (prev === 'Transcribing…' ? '' : prev));
+          }
+          void refreshEntries();
+        } catch (err: any) {
+          console.error('Transcription error:', err);
+          triggerAlert('Transcription failed: ' + (err.message || err), 'error');
+          void refreshEntries();
         }
-      }
+      };
 
-      // B. Setup MediaRecorder for robust background high-quality audio capture
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const mediaRecorder = new MediaRecorder(stream);
-        mediaRecorderRef.current = mediaRecorder;
-
-        mediaRecorder.ondataavailable = (event) => {
-          if (event.data && event.data.size > 0) {
-            audioChunksRef.current.push(event.data);
-          }
-        };
-
-        mediaRecorder.onstop = async () => {
-          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-          if (audioBlob.size > 1000) {
-            setTranscript("Processing high-quality transcription with Gemini...");
-            const formData = new FormData();
-            formData.append('audio', audioBlob, 'recording.webm');
-
-            try {
-              const res = await fetch('/api/journal/transcribe-audio', {
-                method: 'POST',
-                body: formData
-              });
-              const data = await res.json();
-              if (data.success && data.transcript) {
-                setTranscript(data.transcript);
-                // Trigger auto archiving after successful transcription
-                await handleAutoArchive(data.transcript);
-              } else {
-                setTranscript("Transcription complete. Ensure Gemini API Key is configured.");
-              }
-            } catch (err: any) {
-              console.error("Transcription error:", err);
-            }
-          }
-          stream.getTracks().forEach(track => track.stop());
-        };
-
-        mediaRecorder.start();
-      } catch (err) {
-        console.error("MediaRecorder start failed:", err);
-      }
+      mediaRecorder.start();
+    } catch (err) {
+      console.error('MediaRecorder start failed:', err);
+      stopStream();
+      setIsRecording(false);
+      triggerAlert(
+        'Could not start the recorder on this device. On iPhone, recording needs Safari over https — a Tailscale https hostname works.',
+        'error',
+      );
     }
   };
 
-  // Handle auto-archiving on stop recording
-  const handleAutoArchive = async (textToArchive: string) => {
-    if (!googleToken || !textToArchive.trim() || textToArchive.startsWith("Recording started...") || textToArchive.startsWith("Processing high-quality")) return;
-    
-    // 1. Auto generate title first
-    let generatedTitle = sessionName;
+  const handleAutoArchive = async (textToArchive: string, id?: string) => {
+    if (!textToArchive.trim()) return;
+
+    let generatedTitle = sessionNameRef.current;
     if (!generatedTitle || generatedTitle === 'Untitled Memory' || generatedTitle === 'Generating Title...') {
       try {
         const res = await fetch('/api/journal/autotitle', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ transcript: textToArchive })
+          body: JSON.stringify({ transcript: textToArchive }),
         });
         const data = await res.json();
-        generatedTitle = data.title || "Auto Saved Entry";
-        setSessionName(generatedTitle);
+        generatedTitle = data.title || 'Auto Saved Entry';
       } catch (e) {
-        generatedTitle = "Auto Saved Entry";
+        generatedTitle = 'Auto Saved Entry';
       }
+      setSessionName(generatedTitle);
     }
 
-    // 2. Archive to Google Doc automatically
+    // The title lands on disk before Drive is even attempted.
+    try {
+      const res = await fetch('/api/vault/entries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: id ?? undefined,
+          title: generatedTitle,
+          text: textToArchive,
+          indicators: tagsRef.current,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setEntryId(data.entry.id);
+        setSavedAt(data.entry.updated);
+        id = data.entry.id;
+      }
+      void refreshEntries();
+    } catch (e) {
+      console.error('Vault save after transcription failed:', e);
+    }
+
+    if (!connectedRef.current) return; // no Drive link is fine — the entry is already safe
+    await archiveAsDoc(generatedTitle.trim(), textToArchive, tagsRef.current, id);
+  };
+
+  const archiveAsDoc = async (title: string, body: string, tags: string[], id?: string) => {
     setIsArchiving(true);
     setArchiveLink(null);
     setArchiveError(null);
-
-    const title = generatedTitle.trim();
-    const tagsInfo = detectedTags.length > 0 ? `\n\n[Live Indicators Detected: ${detectedTags.join(', ')}]` : '';
-    const formattedContent = `${title}\nCreated: ${new Date().toLocaleString()}${tagsInfo}\n\n${textToArchive}`;
-
+    const tagsInfo = tags.length > 0 ? `\n\n[Live Indicators Detected: ${tags.join(', ')}]` : '';
+    const formattedContent = `${title}\nCreated: ${new Date().toLocaleString()}${tagsInfo}\n\n${body}`;
     try {
       const res = await fetch('/api/drive/create-doc', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          accessToken: googleToken,
-          title,
-          content: formattedContent
-        })
+        body: JSON.stringify({ title, content: formattedContent }),
       });
       const data = await res.json();
       if (data.success && data.viewUrl) {
         setArchiveLink(data.viewUrl);
+        // Record where the mirror lives, on the entry itself.
+        const targetId = id ?? entryId;
+        if (targetId) {
+          await fetch('/api/vault/entries', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: targetId, drive: data.viewUrl }),
+          }).catch(() => {});
+          void refreshEntries();
+        }
+      } else {
+        setArchiveError(data.error || 'Could not save to Google Docs.');
       }
-    } catch (err) {
-      console.error("Auto archive failed:", err);
+    } catch (e: any) {
+      setArchiveError(e.message || 'Failed to contact Drive services.');
     } finally {
       setIsArchiving(false);
     }
   };
 
-  const triggerOpinion = () => {
+  const companion = (type: 'speak_trigger_opinion' | 'speak_trigger_more') => {
     if (!transcript.trim()) {
-      setAiResponse("Please write or speak some thoughts first before requesting an opinion.");
+      triggerAlert('Write or speak something first.', 'info');
       return;
     }
-    setAiResponse('Thinking...');
-    wsRef.current?.send(JSON.stringify({ type: 'speak_trigger_opinion', transcript }));
-  };
-
-  const triggerMore = () => {
-    if (!transcript.trim()) {
-      setAiResponse("Please write or speak some thoughts first before prompting for more.");
-      return;
-    }
-    setAiResponse('Thinking...');
-    wsRef.current?.send(JSON.stringify({ type: 'speak_trigger_more', transcript }));
+    setAiResponse('Thinking…');
+    wsRef.current?.send(JSON.stringify({ type, transcript }));
   };
 
   const autoTitle = async () => {
     if (!transcript.trim()) return;
-    setSessionName("Generating Title...");
+    setSessionName('Generating Title...');
     try {
       const res = await fetch('/api/journal/autotitle', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transcript })
+        body: JSON.stringify({ transcript }),
       });
       const data = await res.json();
-      if (data.title) {
-        setSessionName(data.title);
-      }
+      setSessionName(data.title || 'My Story Entry');
     } catch (e) {
-      setSessionName("My Story Entry");
+      setSessionName('My Story Entry');
     }
   };
 
-  // Real upload to Google Docs
   const saveToGoogleDocs = async () => {
-    if (!googleToken) {
-      triggerAlert("Please connect your Google Account first.", "info");
-      return;
-    }
-    if (!transcript.trim()) {
-      triggerAlert("Your vault memory is empty. Write or speak something first.", "info");
-      return;
-    }
-
-    setIsArchiving(true);
-    setArchiveLink(null);
-    setArchiveError(null);
-
-    const title = sessionName.trim() || `My Story Reflections - ${new Date().toLocaleDateString()}`;
-    const tagsInfo = detectedTags.length > 0 ? `\n\n[Live Indicators Detected: ${detectedTags.join(', ')}]` : '';
-    const formattedContent = `${title}\nCreated: ${new Date().toLocaleString()}${tagsInfo}\n\n${transcript}`;
-
-    try {
-      const res = await fetch('/api/drive/create-doc', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          accessToken: googleToken,
-          title,
-          content: formattedContent
-        })
-      });
-
-      const data = await res.json();
-      if (data.success && data.viewUrl) {
-        setArchiveLink(data.viewUrl);
-      } else {
-        setArchiveError(data.error || "Could not save to Google Docs.");
-      }
-    } catch (e: any) {
-      setArchiveError(e.message || "Failed to contact Drive services.");
-    } finally {
-      setIsArchiving(false);
-    }
+    if (!google.connected) return triggerAlert('Link a Google account first.', 'info');
+    if (!transcript.trim()) return triggerAlert('The vault is empty. Write or speak something first.', 'info');
+    const title = sessionName.trim() || `My Story Reflections — ${new Date().toLocaleDateString()}`;
+    const entry = await persist(); // disk first, always
+    await archiveAsDoc(title, transcript, detectedTags, entry?.id ?? entryId ?? undefined);
   };
 
-  // Real upload as .md to Drive
   const saveToDriveMarkdown = async () => {
-    if (!googleToken) {
-      triggerAlert("Please connect your Google Account first.", "info");
-      return;
-    }
-    if (!transcript.trim()) {
-      triggerAlert("Your vault memory is empty. Write or speak something first.", "info");
-      return;
-    }
+    if (!google.connected) return triggerAlert('Link a Google account first.', 'info');
+    if (!transcript.trim()) return triggerAlert('The vault is empty. Write or speak something first.', 'info');
+
+    const saved = await persist(); // disk first, always
 
     setIsArchiving(true);
     setArchiveLink(null);
@@ -498,257 +1149,329 @@ function JournalRoom({ googleToken, userEmail, onLinkGoogle, onDisconnect, trigg
       const res = await fetch('/api/drive/upload-file', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          accessToken: googleToken,
-          filename,
-          content: markdownBody,
-          mimeType: 'text/markdown'
-        })
+        body: JSON.stringify({ filename, content: markdownBody, mimeType: 'text/markdown' }),
       });
-
       const data = await res.json();
       if (data.success && data.viewUrl) {
         setArchiveLink(data.viewUrl);
+        const targetId = saved?.id ?? entryId;
+        if (targetId) {
+          await fetch('/api/vault/entries', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: targetId, drive: data.viewUrl }),
+          }).catch(() => {});
+          void refreshEntries();
+        }
       } else {
-        setArchiveError(data.error || "Could not write markdown file.");
+        setArchiveError(data.error || 'Could not write the markdown file.');
       }
     } catch (e: any) {
-      setArchiveError(e.message || "Failed to contact Google Drive.");
+      setArchiveError(e.message || 'Failed to contact Google Drive.');
     } finally {
       setIsArchiving(false);
     }
   };
 
   return (
-    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-8">
-      {/* Upper Vault Info Banner */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#2D2D2A]/60 pb-6">
-        <div>
-          <div className="inline-block px-3 py-1 border border-[#802829]/30 bg-[#211414] rounded text-[10px] font-sans uppercase tracking-widest text-[#802829] mb-3">
-            🔒 Vault Protected
-          </div>
-          <h2 className="text-3xl italic text-[#C5BDB0]">Silent Vault</h2>
-          <p className="text-[#8B8B7A] mt-1 font-sans text-xs tracking-wider uppercase">Your memory is secure. Speak freely or write below.</p>
-        </div>
-        <div className="flex gap-3">
-          <button 
-            onClick={triggerOpinion} 
-            className="flex items-center gap-2 px-5 py-3 border border-[#802829]/40 bg-transparent rounded text-[#802829] hover:bg-[#802829] hover:text-[#141412] font-sans text-[11px] uppercase tracking-widest transition-all duration-300"
-          >
-            Give me your opinion
-          </button>
-          <button 
-            onClick={triggerMore} 
-            className="flex items-center gap-2 px-5 py-3 border border-[#802829]/40 bg-transparent rounded text-[#802829] hover:bg-[#802829] hover:text-[#141412] font-sans text-[11px] uppercase tracking-widest transition-all duration-300"
-          >
-            Prompt me for more
-          </button>
-        </div>
-      </div>
-
-      {/* Main Journal Editor Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2 flex flex-col gap-6">
-          {/* Note on Microphones inside an Iframe */}
-          <div className="bg-[#1C1C1A] border border-[#2D2D2A]/80 rounded p-4 text-xs font-sans text-[#8B8B7A] flex items-start gap-3">
-            <AlertCircle className="w-5 h-5 text-[#802829] shrink-0" />
-            <div>
-              <span className="text-[#802829] font-bold">Mic Connection Note:</span> Browser security restricts microphones within embedded preview screens. If the start recording button does not capture voice, simply click <span className="text-[#802829] font-bold">"Open in new tab"</span> at the top right of your preview frame to allow microphone permission.
-            </div>
-          </div>
-
-          <div className="flex flex-col sm:flex-row gap-4 p-4 border border-[#2D2D2A] bg-[#1A1A17] rounded">
-            <div className="flex-1">
-              <label className="block text-[10px] font-sans uppercase tracking-widest text-[#8B8B7A] mb-2">Vault Engine</label>
-              <select 
-                value={model}
-                onChange={e => setModel(e.target.value)}
-                className="w-full bg-[#121210] border border-[#2D2D2A] rounded px-3 py-2 text-sm text-[#C5BDB0] font-sans focus:outline-none focus:border-[#802829]/60"
-              >
-                <option value="gemini-2.5-flash-audio">Gemini 2.5 Flash Native Audio Dialog</option>
-                <option value="gemini-3.5-live-translate">Gemini 3.5 Live Translate</option>
-              </select>
-            </div>
-            <div className="w-full sm:w-48">
-              <label className="block text-[10px] font-sans uppercase tracking-widest text-[#8B8B7A] mb-2">Input Language</label>
-              <select 
-                value={language}
-                onChange={e => setLanguage(e.target.value)}
-                className="w-full bg-[#121210] border border-[#2D2D2A] rounded px-3 py-2 text-sm text-[#C5BDB0] font-sans focus:outline-none focus:border-[#802829]/60"
-              >
-                <option value="auto">Auto (Detect)</option>
-                <option value="el">Greek</option>
-                <option value="en">English</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Interactive Text Entry Container */}
-          <div className="bg-[#181815] border border-[#2D2D2A] rounded p-6 min-h-[380px] flex flex-col relative">
-            <div className="flex-1 flex flex-col">
-              <textarea 
-                value={transcript}
-                onChange={e => setTranscript(e.target.value)}
-                placeholder="Click 'Start Recording' to transcribe your voice, or type/edit your thoughts here directly..."
-                className="w-full flex-1 bg-transparent resize-none text-[#C5BDB0] font-serif leading-relaxed text-lg focus:outline-none placeholder:text-[#5C5C54]"
-              />
-              
-              <AnimatePresence>
-                {aiResponse && (
-                  <motion.div 
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    className="mt-6 pt-4 border-t border-[#2D2D2A] border-dashed"
-                  >
-                    <p className="text-[10px] font-sans uppercase tracking-widest text-[#802829] mb-2">Empathy companion response</p>
-                    <p className="text-[#EAE5DB] font-serif italic text-base leading-relaxed bg-[#1F1414] p-4 rounded border border-[#802829]/20">{aiResponse}</p>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-          </div>
-
-          {/* Core Controls Row */}
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <button
-              onClick={toggleRecording}
-              className={`flex items-center gap-2 px-6 py-3 rounded-full font-sans text-[11px] uppercase tracking-widest transition-all duration-300 ${
-                isRecording 
-                  ? 'bg-[#802829]/10 text-[#802829] border border-[#802829] hover:bg-[#802829] hover:text-[#EAE5DB] animate-pulse' 
-                  : 'bg-[#802829] text-[#141412] font-bold hover:bg-[#943132] transition-all'
-              }`}
-            >
-              {isRecording ? <StopCircle className="w-4.5 h-4.5" /> : <Mic className="w-4.5 h-4.5" />}
-              <span>{isRecording ? 'Stop Recording' : 'Start Recording'}</span>
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+      <SectionHead
+        title="Silent Vault"
+        note="Everything is written to this machine first. Google Drive, if you link it, is only a mirror."
+        right={
+          <div className="flex items-center gap-3">
+            {savedAt ? (
+              <span className="tag good">
+                <i />
+                Saved {shortTime(savedAt)}
+              </span>
+            ) : transcript.trim() ? (
+              <span className="tag warn">
+                <i />
+                Not yet saved
+              </span>
+            ) : (
+              <span className="tag good">
+                <i />
+                Vault Protected
+              </span>
+            )}
+            <button className="btn btn-sm cut-sm" onClick={newEntry} title="Start a new entry">
+              New
             </button>
+          </div>
+        }
+      />
 
-            {/* Compact Manual Session & Archive Controls */}
-            <div className="flex flex-col gap-2 p-3 border border-[#2D2D2A]/60 bg-[#121210]/60 rounded-lg max-w-md ml-auto">
-              <span className="text-[9px] font-sans uppercase tracking-widest text-[#8B8B7A]">Manual Session Controls</span>
-              
-              <div className="flex items-center gap-3">
-                {/* Manual Session Name Input */}
-                <div className="flex bg-[#121210] border border-[#2D2D2A] rounded overflow-hidden">
-                  <input 
-                    type="text" 
-                    placeholder="Manual Session Name" 
-                    value={sessionName}
-                    onChange={e => setSessionName(e.target.value)}
-                    className="bg-transparent px-2 py-1 text-[10px] focus:outline-none text-[#C5BDB0] font-sans w-36"
-                  />
-                  <button 
-                    onClick={autoTitle}
-                    disabled={!transcript.trim()}
-                    className="px-2 border-l border-[#2D2D2A] text-[#8B8B7A] hover:text-[#C5BDB0] text-[8px] font-sans uppercase tracking-widest transition-colors flex items-center gap-1 disabled:opacity-40"
-                    title="Generate Title with Gemini"
-                  >
-                    <RefreshCw className="w-2.5 h-2.5" /> Auto
+      {recovered && (
+        <div className="callout warn mb-6">
+          <span className="cd" />
+          <span>
+            <b>Recovered an unsaved draft.</b> This was still in the browser from last time. It will be written to the
+            vault as soon as you touch it, or press Save now.
+          </span>
+        </div>
+      )}
+
+      <div className="grid split split-wide">
+        {/* ---- writing column ---- */}
+        <div className="flex flex-col gap-6">
+          <Frame title="The Vault">
+            <div className="inwrap cut-sm">
+              <textarea
+                className="input"
+                style={{ minHeight: '340px', fontFamily: 'var(--body)', fontSize: 'var(--step-0)', lineHeight: 1.75 }}
+                value={transcript}
+                onChange={e => {
+                  setTranscript(e.target.value);
+                  setRecovered(false); // they have seen it and taken the entry back over
+                }}
+                placeholder="Press RECORD to speak, or simply begin writing here…"
+              />
+            </div>
+
+            <AnimatePresence>
+              {aiResponse && (
+                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-6">
+                  <div className="clabel mb-2">Companion</div>
+                  <blockquote className="bq">{aiResponse}</blockquote>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <div className="flex flex-wrap items-center gap-3 mt-6">
+              <button
+                className={`btn btn-lg cut-sm ${isRecording ? 'btn-crit' : 'btn-primary'}`}
+                aria-pressed={isRecording}
+                onClick={toggleRecording}
+              >
+                <span className="flex items-center gap-2">
+                  {isRecording ? <StopCircle className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                  {isRecording ? 'Stop' : 'Record'}
+                </span>
+              </button>
+              <span className="keydiv" />
+              <button className="btn cut-sm" disabled={!wsReady} onClick={() => companion('speak_trigger_opinion')}>
+                Give me your opinion
+              </button>
+              <button className="btn cut-sm" disabled={!wsReady} onClick={() => companion('speak_trigger_more')}>
+                Prompt me for more
+              </button>
+              {!wsReady && <span className="fhint">Companion offline — reconnecting…</span>}
+            </div>
+          </Frame>
+
+          <Frame title="Session">
+            <div className="grid g3">
+              <div className="field">
+                <label htmlFor="pick-engine">Transcription engine</label>
+                <Picker id="pick-engine" value={engine} onChange={setEngine} groups={engineGroups(providers)} />
+              </div>
+              <div className="field">
+                <label htmlFor="pick-lang">Spoken language</label>
+                <Picker id="pick-lang" value={language} onChange={setLanguage} groups={LANGUAGES} />
+              </div>
+              <div className="field">
+                <label>Entry title</label>
+                <div className="flex gap-2 items-stretch">
+                  <span className="inwrap cut-sm flex-1">
+                    <input
+                      className="input"
+                      value={sessionName}
+                      placeholder="Left blank, one is written for you"
+                      onChange={e => setSessionName(e.target.value)}
+                    />
+                  </span>
+                  <button className="btn btn-sm cut-sm" disabled={!transcript.trim()} onClick={autoTitle} title="Write a title with Gemini">
+                    Auto
                   </button>
                 </div>
+              </div>
+            </div>
 
-                {/* Manual Archive Actions */}
-                {googleToken ? (
-                  <div className="flex items-center gap-2">
-                    <button 
-                      onClick={saveToGoogleDocs}
-                      disabled={isArchiving || !transcript.trim()}
-                      className="flex items-center gap-1 px-2.5 py-1.5 bg-[#211414] border border-[#802829]/30 hover:bg-[#802829] hover:text-[#141412] text-[#802829] rounded text-[9px] font-sans uppercase tracking-widest transition-colors disabled:opacity-40"
-                      title="Manually archive as a Google Doc"
+            <div className="flex flex-wrap items-center gap-3 mt-2">
+              <button className="btn cut-sm" disabled={!transcript.trim()} onClick={() => void persist()}>
+                <span className="flex items-center gap-2">
+                  <Save className="w-3.5 h-3.5" />
+                  Save now
+                </span>
+              </button>
+              <span className="keydiv" />
+              {google.connected ? (
+                <>
+                  <button className="btn cut-sm" disabled={isArchiving || !transcript.trim()} onClick={saveToGoogleDocs}>
+                    <span className="flex items-center gap-2">
+                      <FileText className="w-3.5 h-3.5" />
+                      Archive as doc
+                    </span>
+                  </button>
+                  <button className="btn cut-sm" disabled={isArchiving || !transcript.trim()} onClick={saveToDriveMarkdown}>
+                    <span className="flex items-center gap-2">
+                      <UploadCloud className="w-3.5 h-3.5" />
+                      Archive as markdown
+                    </span>
+                  </button>
+                </>
+              ) : (
+                <button className="btn cut-sm" onClick={onLinkGoogle}>
+                  <span className="flex items-center gap-2">
+                    <UploadCloud className="w-3.5 h-3.5" />
+                    Link Google Drive
+                  </span>
+                </button>
+              )}
+              {isArchiving && (
+                <span className="flex items-center gap-3 fhint">
+                  <span className="spinner" />
+                  Writing to your Google account…
+                </span>
+              )}
+            </div>
+            <p className="fhint mt-3">
+              Entries save themselves to this machine a few seconds after you stop typing. Archiving only adds a copy
+              in Drive.
+            </p>
+
+            <AnimatePresence>
+              {archiveLink && (
+                <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="mt-5">
+                  <div className="callout">
+                    <span className="cd" />
+                    <div className="flex flex-wrap items-center gap-4 w-full">
+                      <span className="tag good">
+                        <i />
+                        Saved
+                      </span>
+                      <span className="flex-1">This entry now exists in your own Google space.</span>
+                      <a className="btn btn-sm cut-sm no-underline" href={archiveLink} target="_blank" rel="noreferrer">
+                        <span className="flex items-center gap-2">
+                          View <ExternalLink className="w-3 h-3" />
+                        </span>
+                      </a>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+              {archiveError && (
+                <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="mt-5">
+                  <div className="callout crit">
+                    <span className="cd" />
+                    <span>
+                      <b>Drive refused the write.</b> {archiveError}
+                    </span>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </Frame>
+        </div>
+
+        {/* ---- vault contents + indicators ---- */}
+        <div className="flex flex-col gap-6">
+          <Frame
+            title="Entries"
+            headRight={entries.length > 0 ? <span className="tag"><i />{entries.length}</span> : undefined}
+          >
+            {entries.length === 0 ? (
+              <div className="empty">
+                <span className="emptymark cut" />
+                <span className="fhint">The vault on this machine is empty.</span>
+              </div>
+            ) : (
+              <div className="flex flex-col max-h-96 overflow-y-auto">
+                {entries.map(e => (
+                  <div key={e.id} className="listrow">
+                    <button
+                      className="flex flex-col flex-1 min-w-0 text-left"
+                      style={{ background: 'none', border: 0, cursor: 'pointer', padding: 0 }}
+                      onClick={() => void openEntry(e.id)}
+                      aria-current={e.id === entryId}
                     >
-                      <FileText className="w-2.5 h-2.5" />
-                      Manual Doc
+                      <span
+                        className="listname truncate w-full"
+                        style={{ color: e.id === entryId ? 'var(--accent-hi)' : undefined }}
+                      >
+                        {e.title}
+                      </span>
+                      <span className="listsub">
+                        {shortDate(e.created)} · {e.words} words{e.audio ? ' · audio' : ''}
+                      </span>
                     </button>
-                    <button 
-                      onClick={saveToDriveMarkdown}
-                      disabled={isArchiving || !transcript.trim()}
-                      className="flex items-center gap-1 px-2.5 py-1.5 bg-[#1C1C1A] border border-[#2D2D2A] hover:bg-[#2D2D2A] text-[#C5BDB0] rounded text-[9px] font-sans uppercase tracking-widest transition-colors disabled:opacity-40"
-                      title="Manually upload as a Markdown file"
+                    {e.drive ? (
+                      <span className="tag good"><i />Mirrored</span>
+                    ) : (
+                      <span className="tag"><i />Local</span>
+                    )}
+                    <button
+                      className="btn btn-sm cut-sm"
+                      title="Move to the vault trash — the file stays on disk"
+                      onClick={() => void trashEntry(e.id)}
                     >
-                      <UploadCloud className="w-2.5 h-2.5" />
-                      Manual MD
+                      Trash
                     </button>
                   </div>
-                ) : (
-                  <button 
-                    onClick={onLinkGoogle}
-                    className="flex items-center gap-1 px-2.5 py-1.5 bg-[#1C1C1A] border border-[#802829]/40 hover:bg-[#802829]/10 text-[#802829] rounded text-[9px] font-sans uppercase tracking-widest transition-colors"
-                  >
-                    <UploadCloud className="w-2.5 h-2.5" />
-                    Link Google Drive
-                  </button>
-                )}
+                ))}
               </div>
-              <p className="text-[8px] text-[#8B8B7A]/80 font-sans tracking-wide italic mt-0.5">
-                * This session will be titled and archived automatically if not done manually.
-              </p>
-            </div>
-          </div>
-
-          {/* Link Results */}
-          <AnimatePresence>
-            {isArchiving && (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-sm font-sans text-[#8B8B7A] flex items-center gap-2">
-                <RefreshCw className="w-4 h-4 animate-spin text-[#802829]" /> Saving real file to your Google account...
-              </motion.div>
             )}
-            {archiveLink && (
-              <motion.div 
-                initial={{ opacity: 0, y: 5 }} 
-                animate={{ opacity: 1, y: 0 }}
-                className="p-4 bg-[#141C16] border border-[#27532B] rounded flex flex-col md:flex-row md:items-center justify-between gap-3 font-sans"
-              >
-                <div>
-                  <h4 className="text-xs font-bold uppercase tracking-widest text-[#41A85C]">✓ Memory Saved Successfully!</h4>
-                  <p className="text-xs text-[#8B8B7A] mt-1">This entry has been written to your personal Google space.</p>
+          </Frame>
+
+          <Frame title="Indicators" lit>
+            <p className="sec-note" style={{ marginBottom: 'var(--gap)' }}>
+              Named patterns as they surface in the text. They travel with the entry into the archive.
+            </p>
+            <div className="flex flex-col gap-4 items-stretch">
+              {CATEGORY_ORDER.filter(c => detectedIndicators.some(i => i.category === c)).map(cat => (
+                <div key={cat}>
+                  <p className="k" style={{ marginBottom: 6 }}>{CATEGORY_LABEL[cat]}</p>
+                  <div className="flex flex-col gap-3 items-start">
+                    {detectedIndicators
+                      .filter(i => i.category === cat)
+                      .map(i => (
+                        <motion.div
+                          key={i.id}
+                          initial={{ opacity: 0, x: 12 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          style={{ width: '100%' }}
+                        >
+                          <span className={`tag${cat === 'protection' ? ' good' : ''}`}>{i.label}</span>
+                          <p className="fhint" style={{ marginTop: 6 }}>{i.definition}</p>
+                          {i.evidence && (
+                            <p
+                              className="sec-note"
+                              style={{ marginTop: 6, paddingLeft: 10, borderLeft: '2px solid var(--rule)' }}
+                            >
+                              “{i.evidence}”
+                            </p>
+                          )}
+                        </motion.div>
+                      ))}
+                  </div>
                 </div>
-                <a 
-                  href={archiveLink} 
-                  target="_blank" 
-                  rel="noreferrer" 
-                  className="px-4 py-2 bg-[#1C4124] text-[#EAE5DB] hover:bg-[#27532B] rounded text-xs uppercase tracking-widest transition-all flex items-center gap-1"
-                >
-                  View on Google <ExternalLink className="w-3.5 h-3.5" />
-                </a>
-              </motion.div>
-            )}
-            {archiveError && (
-              <motion.div 
-                initial={{ opacity: 0, y: 5 }} 
-                animate={{ opacity: 1, y: 0 }}
-                className="p-4 bg-[#1E1111] border border-[#532727] rounded text-xs font-sans text-[#C5BDB0]"
-              >
-                <span className="text-[#802829] font-bold">Drive Error:</span> {archiveError}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
+              ))}
 
-        {/* Real-time indicator sidebar */}
-        <div className="col-span-1 bg-[#1A1A17] border border-[#2D2D2A] rounded p-6 flex flex-col">
-          <h3 className="text-[10px] font-sans uppercase tracking-widest text-[#8B8B7A] mb-4 flex items-center justify-between">
-            Live Indicators
-            <span className="text-[8px] px-2 py-0.5 bg-[#211414] text-[#802829] border border-[#802829]/20 rounded">Real-time Parsing</span>
-          </h3>
-          <p className="text-xs text-[#8B8B7A] font-sans leading-relaxed mb-6">Analyzes traumatic narrative markers as they form. These indicators are preserved within the archive metadata.</p>
-          
-          <div className="flex-1 flex flex-col gap-3">
-            {detectedTags.map(tag => (
-              <motion.div 
-                initial={{ opacity: 0, x: 20 }} 
-                animate={{ opacity: 1, x: 0 }} 
-                key={tag}
-                className="px-3 py-2.5 border border-[#802829]/20 rounded text-sm text-[#C5BDB0] bg-[#121210] flex justify-between items-center"
-              >
-                <span className="font-sans text-xs tracking-wider">{tag}</span>
-                <span className="w-2 h-2 rounded-full bg-[#802829] animate-pulse"></span>
-              </motion.div>
-            ))}
-            {detectedTags.length === 0 && (
-              <div className="text-center text-[#8B8B7A]/40 text-xs py-10 font-sans italic">
-                No active indicators...
-              </div>
-            )}
+              {/* Entries written before the vocabulary carried definitions. */}
+              {detectedIndicators.length === 0 &&
+                detectedTags.map(tag => (
+                  <motion.span key={tag} initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} className="tag">
+                    {tag}
+                  </motion.span>
+                ))}
+
+              {detectedTags.length === 0 && detectedIndicators.length === 0 && (
+                <div className="empty w-full">
+                  <span className="emptymark cut" />
+                  <span className="fhint">Nothing named yet.</span>
+                </div>
+              )}
+            </div>
+          </Frame>
+
+          <div className="callout warn">
+            <span className="cd" />
+            <span>
+              <b>Microphone.</b> A browser will not grant the microphone inside an embedded preview. Open the app in
+              its own tab if RECORD captures nothing.
+            </span>
           </div>
         </div>
       </div>
@@ -756,217 +1479,416 @@ function JournalRoom({ googleToken, userEmail, onLinkGoogle, onDisconnect, trigg
   );
 }
 
-interface SynthesisStudioProps {
-  googleToken: string | null;
-  key?: string;
-}
+/* =============================================================================
+   SYNTHESIS
+   ========================================================================== */
 
-function SynthesisStudio({ googleToken }: SynthesisStudioProps) {
-  const [model, setModel] = useState('gemma-4-31b');
-  const [prompt, setPrompt] = useState('Synthesize these journal entries into a cohesive chapter outline, focusing on identifying patterns of emotional invalidation and resilience.');
+function SynthesisStudio({ google }: { key?: string; google: GoogleStatus }) {
+  const [providers] = useProviders();
+  const modelGroups: PickerGroup[] = providers.synthesis.map(g => ({
+    label: g.local ? `${g.label} — on this machine` : g.label,
+    options: g.options,
+  }));
+  const [model, setModel] = useState('');
+  useEffect(() => {
+    // Default to the first model the server says it can actually reach.
+    if (!model && modelGroups[0]?.options[0]) setModel(modelGroups[0].options[0].value);
+  }, [model, modelGroups]);
+  const [prompt, setPrompt] = useState(
+    'Synthesize these journal entries into a cohesive chapter outline, focusing on identifying patterns of emotional invalidation and resilience.',
+  );
   const [isGenerating, setIsGenerating] = useState(false);
   const [draft, setDraft] = useState('');
+  const [synthError, setSynthError] = useState<string | null>(null);
   const [driveFiles, setDriveFiles] = useState<any[]>([]);
   const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
+  const [localEntries, setLocalEntries] = useState<VaultSummary[]>([]);
+  const [selectedLocalIds, setSelectedLocalIds] = useState<string[]>([]);
 
-  // Load real user files if Google is connected
   useEffect(() => {
-    if (googleToken) {
-      setIsLoadingFiles(true);
-      fetch('/api/drive/list-files', {
-        headers: { 'Authorization': `Bearer ${googleToken}` }
+    fetch('/api/vault/entries')
+      .then(r => r.json())
+      .then(d => {
+        if (d.success) setLocalEntries((d.entries || []).filter((e: VaultSummary) => e.words > 0));
       })
+      .catch(console.error);
+  }, []);
+
+  useEffect(() => {
+    if (!google.connected) return;
+    setIsLoadingFiles(true);
+    fetch('/api/drive/list-files')
       .then(r => r.json())
       .then(data => {
-        if (data.success) {
-          setDriveFiles(data.files || []);
-        }
+        if (data.success) setDriveFiles(data.files || []);
       })
       .catch(console.error)
       .finally(() => setIsLoadingFiles(false));
-    }
-  }, [googleToken]);
+  }, [google.connected]);
 
   const handleSynthesize = async () => {
     setIsGenerating(true);
     setDraft('');
-    
-    // Package selected files metadata to send
+    setSynthError(null);
     const selectedFiles = driveFiles.filter(f => selectedFileIds.includes(f.id));
-
     try {
       const res = await fetch('/api/synthesize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          files: selectedFiles, 
-          model, 
+        body: JSON.stringify({
+          files: selectedFiles,
+          localIds: selectedLocalIds,
+          model,
           prompt,
-          accessToken: googleToken
-        })
+        }),
       });
       const data = await res.json();
-      if (data.success) {
-        setDraft(data.draft);
-      } else {
-        setDraft(`Error: ${data.error}\n\nPlease verify your API keys are configured correctly in the Settings Center.`);
-      }
+      if (data.success) setDraft(data.draft);
+      else setSynthError(data.error || 'The model returned nothing.');
     } catch (e: any) {
-      setDraft(`Error: ${e.message}`);
+      setSynthError(e.message);
     } finally {
       setIsGenerating(false);
     }
   };
 
   const toggleSelectFile = (fileId: string) => {
-    setSelectedFileIds(prev => 
-      prev.includes(fileId) ? prev.filter(id => id !== fileId) : [...prev, fileId]
-    );
+    setSelectedFileIds(prev => (prev.includes(fileId) ? prev.filter(id => id !== fileId) : [...prev, fileId]));
   };
 
-  return (
-    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-8">
-      <div className="mb-8 border-b border-[#2D2D2A]/60 pb-6">
-        <h2 className="text-3xl italic text-[#C5BDB0]">Synthesis Studio</h2>
-        <p className="text-[#8B8B7A] mt-1 font-sans text-xs tracking-wider uppercase">Compile your real archived entries directly into book chapters.</p>
-      </div>
+  const toggleSelectLocal = (id: string) => {
+    setSelectedLocalIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
+  };
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-1 flex flex-col gap-6">
-          <div className="bg-[#1A1A17] border border-[#2D2D2A] rounded p-6">
-            <h3 className="text-[11px] font-sans uppercase tracking-widest text-[#8B8B7A] mb-4 flex items-center gap-2">
-              <BookOpen className="w-4 h-4 text-[#802829]" />
-              <span>Drive Source Materials</span>
-            </h3>
-            
-            {googleToken ? (
-              <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+  const totalSelected = selectedFileIds.length + selectedLocalIds.length;
+  const nothingSelected = totalSelected === 0;
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+      <SectionHead title="Synthesis" note="Read the archive back, and let it become chapters." />
+
+      <div className="grid split split-narrow">
+        <div className="flex flex-col gap-6">
+          <Frame
+            title="Sources"
+            headRight={totalSelected > 0 ? <span className="tag good"><i />{totalSelected} selected</span> : undefined}
+          >
+            <div className="clabel mb-2">This machine</div>
+            {localEntries.length > 0 ? (
+              <div className="flex flex-col gap-1 max-h-72 overflow-y-auto mb-6">
+                {localEntries.map(e => (
+                  <label key={e.id} className="check py-2">
+                    <input
+                      type="checkbox"
+                      checked={selectedLocalIds.includes(e.id)}
+                      onChange={() => toggleSelectLocal(e.id)}
+                    />
+                    <span className="box" />
+                    <span className="txt flex flex-col min-w-0">
+                      <span className="truncate">{e.title}</span>
+                      <span className="fhint">
+                        {shortDate(e.created)} · {e.words} words
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            ) : (
+              <p className="fhint mb-6">Nothing written yet. Entries appear here as soon as you save one.</p>
+            )}
+
+            <div className="clabel mb-2">Google Drive</div>
+            {google.connected ? (
+              <div className="flex flex-col gap-1 max-h-80 overflow-y-auto">
                 {isLoadingFiles ? (
-                  <p className="text-xs font-sans text-[#8B8B7A] animate-pulse">Loading documents from Google Drive...</p>
+                  <div className="flex flex-col gap-3 py-2">
+                    <span className="skel" />
+                    <span className="skel" style={{ width: '80%' }} />
+                    <span className="skel" style={{ width: '60%' }} />
+                  </div>
                 ) : driveFiles.length > 0 ? (
                   driveFiles.map(file => (
-                    <label key={file.id} className="flex items-start gap-3 p-3 hover:bg-[#2D2D2A]/50 rounded cursor-pointer transition-colors border border-transparent hover:border-[#2D2D2A]">
-                      <input 
-                        type="checkbox" 
+                    <label key={file.id} className="check py-2">
+                      <input
+                        type="checkbox"
                         checked={selectedFileIds.includes(file.id)}
                         onChange={() => toggleSelectFile(file.id)}
-                        className="mt-0.5 rounded border-[#2D2D2A] bg-[#121210] text-[#802829] focus:ring-[#802829]" 
                       />
-                      <div className="flex flex-col">
-                        <span className="text-xs font-sans text-[#EAE5DB] line-clamp-1">{file.name}</span>
-                        <span className="text-[9px] text-[#8B8B7A] font-sans mt-0.5">Type: {file.mimeType.split('.').pop()}</span>
-                      </div>
+                      <span className="box" />
+                      <span className="txt flex flex-col">
+                        <span className="truncate">{file.name}</span>
+                        <span className="fhint">
+                          {file.mimeType === 'application/vnd.google-apps.document' ? 'Google Doc' : file.mimeType}
+                        </span>
+                      </span>
                     </label>
                   ))
                 ) : (
-                  <p className="text-xs font-sans text-[#8B8B7A] italic py-4">No compatible files found in Drive. Write and save some memories in the Vault tab first!</p>
+                  <div className="empty">
+                    <span className="emptymark cut" />
+                    <span className="fhint">Nothing archived yet. Write in the Vault first.</span>
+                  </div>
                 )}
               </div>
             ) : (
-              <div className="py-6 text-center border border-dashed border-[#2D2D2A] rounded p-4">
-                <p className="text-xs font-sans text-[#8B8B7A] mb-4">Please connect your Google Account to dynamically read files from your Google Drive.</p>
-                <p className="text-[10px] text-[#802829] uppercase tracking-widest font-sans font-bold">Awaiting Auth Link...</p>
-              </div>
+              <p className="fhint">Not linked. Local entries above are enough to synthesize from.</p>
             )}
-          </div>
+          </Frame>
 
-          <div className="bg-[#1A1A17] border border-[#2D2D2A] rounded p-6 flex flex-col gap-5">
-            <div>
-              <label className="block text-[10px] font-sans uppercase tracking-widest text-[#8B8B7A] mb-2">Synthesis Model</label>
-              <select 
-                value={model}
-                onChange={e => setModel(e.target.value)}
-                className="w-full bg-[#121210] border border-[#2D2D2A] rounded px-3 py-2 text-sm text-[#C5BDB0] font-sans focus:outline-none focus:border-[#802829]/60"
-              >
-                <optgroup label="Gemini (Recommended)">
-                  <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
-                  <option value="gemma-4-31b">Gemma 4 31B</option>
-                </optgroup>
-                <optgroup label="Groq SOTA Models">
-                  <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile (Groq)</option>
-                  <option value="meta-llama/llama-4-scout-17b-16e-instruct">meta-llama/llama-4-scout-17b-16e-instruct (Groq)</option>
-                  <option value="openai/gpt-oss-20b">openai/gpt-oss-20b (Groq)</option>
-                  <option value="qwen/qwen3-32b">qwen/qwen3-32b (Groq)</option>
-                </optgroup>
-                <optgroup label="Cerebras SOTA Models">
-                  <option value="cerebras/gemma-4-31b">gemma-4-31b (Cerebras)</option>
-                </optgroup>
-                <optgroup label="NVIDIA">
-                  <option value="nvidia/nemotron-3-ultra-550b-a55b">nvidia/nemotron-3-ultra-550b-a55b</option>
-                  <option value="openai/gpt-oss-120b">openai/gpt-oss-120b</option>
-                  <option value="qwen/qwen3.5-397b-a17b">qwen/qwen3.5-397b-a17b</option>
-                </optgroup>
-                <optgroup label="Mistral">
-                  <option value="magistral-medium-2509">magistral-medium-2509</option>
-                  <option value="mistral-large-2512">mistral-large-2512</option>
-                </optgroup>
-              </select>
+          <Frame title="Directives">
+            <div className="field">
+              <label htmlFor="pick-model">Model</label>
+              <Picker id="pick-model" value={model} onChange={setModel} groups={modelGroups} />
             </div>
-            
-            <div>
-              <label className="block text-[10px] font-sans uppercase tracking-widest text-[#8B8B7A] mb-2">Synthesis Directives</label>
-              <textarea 
-                value={prompt}
-                onChange={e => setPrompt(e.target.value)}
-                className="w-full bg-[#121210] border border-[#2D2D2A] rounded px-3 py-2 text-xs text-[#C5BDB0] font-sans focus:outline-none focus:border-[#802829]/60 h-28 resize-none"
-              />
+            <div className="field">
+              <label>Instruction</label>
+              <span className="inwrap cut-sm">
+                <textarea className="input" style={{ minHeight: '120px' }} value={prompt} onChange={e => setPrompt(e.target.value)} />
+              </span>
             </div>
-
-            <button 
-              onClick={handleSynthesize}
-              disabled={isGenerating || (googleToken && selectedFileIds.length === 0)}
-              className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[#802829] text-[#141412] hover:bg-[#943132] rounded text-[11px] font-bold font-sans uppercase tracking-widest transition-all disabled:opacity-40"
-            >
-              {isGenerating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-              <span>{isGenerating ? 'Synthesizing...' : 'Synthesize Draft'}</span>
+            <button className="btn btn-lg btn-primary cut-sm w-full" disabled={isGenerating || nothingSelected} onClick={handleSynthesize}>
+              <span className="flex items-center justify-center gap-2">
+                {isGenerating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                {isGenerating ? 'Synthesizing…' : 'Synthesize'}
+              </span>
             </button>
-            {googleToken && selectedFileIds.length === 0 && (
-              <p className="text-[9px] text-[#8B8B7A] text-center font-sans">Please select at least one file from your Google Drive list to synthesize.</p>
+            {nothingSelected && <p className="fhint mt-3">Select at least one source above.</p>}
+            {selectedLocalIds.length > 0 && (
+              <p className="fhint mt-3">
+                {selectedLocalIds.length} entries leave this machine and are sent to the model you chose.
+              </p>
             )}
-          </div>
+          </Frame>
         </div>
 
-        {/* Chapters view container */}
-        <div className="lg:col-span-2">
-          <div className="bg-[#1A1A17] border border-[#2D2D2A] rounded p-8 min-h-[500px]">
-            {draft ? (
-              <div className="prose prose-invert prose-neutral max-w-none">
-                <pre className="text-[#C5BDB0] font-serif whitespace-pre-wrap leading-relaxed text-base">{draft}</pre>
+        <Frame title="Draft" lit>
+          {isGenerating && <div className="loader mb-6" />}
+          {synthError && (
+            <div className="callout crit">
+              <span className="cd" />
+              <span>
+                <b>Synthesis failed.</b> {synthError} Check the key for this provider in Settings.
+              </span>
+            </div>
+          )}
+          {draft ? (
+            <div className="prose">
+              {draft.split(/\n{2,}/).map((para, i) => (
+                <p key={i} className={i === 0 ? 'dropcap' : undefined} style={{ whiteSpace: 'pre-wrap' }}>
+                  {para}
+                </p>
+              ))}
+            </div>
+          ) : (
+            !synthError && (
+              <div className="empty" style={{ padding: '5rem 1rem' }}>
+                <span className="emptymark cut" />
+                <span className="fhint">Choose sources, set the instruction, and the chapter is written here.</span>
               </div>
-            ) : (
-              <div className="h-full flex flex-col items-center justify-center text-[#8B8B7A] py-32 font-sans text-sm gap-4">
-                <FileText className="w-10 h-10 opacity-40 text-[#802829]" />
-                <p className="text-center text-xs tracking-wider max-w-md">Select source documents, configure your parameters, and execute synthesis to compile your draft chapter.</p>
-              </div>
-            )}
-          </div>
-        </div>
+            )
+          )}
+        </Frame>
       </div>
     </motion.div>
   );
 }
 
+/* =============================================================================
+   SETTINGS
+   ========================================================================== */
+
 interface SettingsCenterProps {
-  googleToken: string | null;
-  userEmail: string | null;
+  key?: string;
+  google: GoogleStatus;
   onLinkGoogle: () => any;
   onDisconnect: () => any;
-  triggerAlert?: (msg: string, type?: 'info' | 'error' | 'success') => void;
-  key?: string;
+  onGoogleChanged: () => any;
 }
 
-function SettingsCenter({ googleToken, userEmail, onLinkGoogle, onDisconnect, triggerAlert }: SettingsCenterProps) {
-  const [config, setConfig] = useState<any>({});
-  const [isSaving, setIsSaving] = useState(false);
-  const [showNotification, setShowNotification] = useState(false);
-  
+function LockPanel() {
+  const [locked, setLocked] = useState<boolean | null>(null);
+  const [next, setNext] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ text: string; bad?: boolean } | null>(null);
+
+  const read = async () => {
+    try {
+      const data = await (await fetch('/api/auth/status')).json();
+      setLocked(Boolean(data.locked));
+    } catch (e) {
+      setLocked(null);
+    }
+  };
   useEffect(() => {
-    fetch('/api/config').then(r => r.json()).then(setConfig);
+    void read();
   }, []);
 
-  const handleChange = (key: string, value: string) => {
-    setConfig(prev => ({ ...prev, [key]: value }));
+  const submit = async (value: string) => {
+    setBusy(true);
+    setNote(null);
+    try {
+      const res = await fetch('/api/auth/passcode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ next: value }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setNote({ text: data.error || 'That did not work.', bad: true });
+      } else {
+        setLocked(Boolean(data.locked));
+        setNext('');
+        setNote({ text: data.locked ? 'Passcode set. It is stored only as a hash.' : 'Passcode removed.' });
+      }
+    } catch (e: any) {
+      setNote({ text: e.message || 'Could not reach the server.', bad: true });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Frame title="The lock" className="mb-6" lit={locked === false}>
+      {locked === false && (
+        <div className="callout warn">
+          <span className="cd" />
+          <span>
+            <b>No passcode is set.</b> Anyone who can reach this machine on the network can read every entry. If this
+            box is on your home Wi-Fi as well as the tailnet, set one.
+          </span>
+        </div>
+      )}
+      {locked === true && (
+        <div className="callout">
+          <span className="cd" />
+          <span className="flex items-center gap-3">
+            <span className="tag good">
+              <i />
+              Locked
+            </span>
+            A passcode is required to open the vault.
+          </span>
+        </div>
+      )}
+
+      <div className="field">
+        <label htmlFor="next-passcode">{locked ? 'New passcode' : 'Set a passcode'}</label>
+        <span className="inwrap cut-sm">
+          <input
+            id="next-passcode"
+            className="input"
+            type="password"
+            autoComplete="new-password"
+            placeholder="At least four characters"
+            value={next}
+            onChange={e => setNext(e.target.value)}
+          />
+        </span>
+        <span className="fhint">
+          Stored as a scrypt hash in .env — it cannot be read back out, so there is no recovery. Write it down.
+        </span>
+      </div>
+
+      {note && (
+        <div className={note.bad ? 'callout crit' : 'callout'}>
+          <span className="cd" />
+          <span>{note.text}</span>
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-3">
+        <button className="btn btn-primary cut-sm" disabled={busy || next.length < 4} onClick={() => void submit(next)}>
+          {locked ? 'Change passcode' : 'Set passcode'}
+        </button>
+        {locked && (
+          <button className="btn btn-crit cut-sm" disabled={busy} onClick={() => void submit('')}>
+            Remove passcode
+          </button>
+        )}
+        {locked && (
+          <button
+            className="btn cut-sm"
+            disabled={busy}
+            onClick={async () => {
+              await fetch('/api/auth/lock', { method: 'POST' });
+              window.location.reload();
+            }}
+          >
+            Lock now
+          </button>
+        )}
+      </div>
+    </Frame>
+  );
+}
+
+const ROUTING_NOTE: Record<string, string> = {
+  'cloud-first': 'Cloud providers are asked first, and a local runtime is the fallback.',
+  'local-first': 'Your own machine is asked first. The cloud is only reached when it cannot answer.',
+  'local-only': 'Nothing leaves this machine. Cloud providers are not asked, and Google Drive is switched off.',
+};
+
+function SettingsCenter({ google, onLinkGoogle, onDisconnect, onGoogleChanged }: SettingsCenterProps) {
+  const [config, setConfig] = useState<Record<string, string>>({});
+  const [isSaving, setIsSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [vault, setVault] = useState<{ dir: string; count: number; keepAudio: boolean } | null>(null);
+  const [providers, reloadProviders, loadingModels] = useProviders();
+
+  useEffect(() => {
+    fetch('/api/config')
+      .then(r => r.json())
+      .then(setConfig);
+    fetch('/api/vault/info')
+      .then(r => r.json())
+      .then(d => {
+        if (d.success) setVault(d);
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleChange = (key: string, value: string) => setConfig(prev => ({ ...prev, [key]: value }));
+
+  // Every loaded model, grouped by provider, as picker options.
+  const modelOptions: PickerGroup[] = providers.providers
+    .filter(p => !p.blocked && p.models.length > 0)
+    .map(p => ({
+      label: p.local ? `${p.label} — on this machine` : p.label,
+      options: p.models.map(m => ({ value: `${p.id}::${m}`, label: m })),
+    }));
+
+  const [testing, setTesting] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<Record<string, string>>({});
+
+  /** Assigning a model you cannot actually reach is a failure this app used to
+   *  discover halfway through a recording. Save first, then ask for real. */
+  const testJob = async (task: string) => {
+    setTesting(task);
+    setTestResult(prev => ({ ...prev, [task]: '' }));
+    try {
+      await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      });
+      const r = await fetch('/api/providers/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task }),
+      });
+      const d = await r.json();
+      setTestResult(prev => ({
+        ...prev,
+        [task]: d.success
+          ? `Answered by ${d.provider} · ${d.model}${d.local ? ' (on this machine)' : ''}.`
+          : d.error,
+      }));
+    } catch (e: any) {
+      setTestResult(prev => ({ ...prev, [task]: e?.message || 'Could not reach the app itself.' }));
+    } finally {
+      setTesting(null);
+    }
   };
 
   const handleSave = async () => {
@@ -974,117 +1896,437 @@ function SettingsCenter({ googleToken, userEmail, onLinkGoogle, onDisconnect, tr
     await fetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(config)
+      body: JSON.stringify(config),
     });
     setIsSaving(false);
-    setShowNotification(true);
-    setTimeout(() => setShowNotification(false), 3000);
+    setSaved(true);
+    // Routing or a local endpoint may have just changed what is reachable.
+    void reloadProviders(providers.loaded);
+    // The OAuth client id may have just been filled in, which decides whether
+    // linking is offered at all.
+    void onGoogleChanged();
+    setTimeout(() => setSaved(false), 3000);
   };
 
-  return (
-    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-8">
-      <div className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#2D2D2A]/60 pb-6">
-        <div>
-          <h2 className="text-3xl italic text-[#C5BDB0]">Settings Center</h2>
-          <p className="text-[#8B8B7A] mt-1 font-sans text-xs tracking-wider uppercase">Configure secure local vault parameters and system integration API keys.</p>
-        </div>
-        <button 
-          onClick={handleSave}
-          disabled={isSaving}
-          className="flex items-center gap-2 px-6 py-3 bg-[#802829] hover:bg-[#943132] text-[#141412] font-bold rounded text-[11px] font-sans uppercase tracking-widest transition-all"
-        >
-          {isSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-          <span>{isSaving ? 'Saving...' : 'Save Configuration'}</span>
-        </button>
-      </div>
+  const keyField = (label: string, key: string) => (
+    <Field
+      label={label}
+      value={config[key] || ''}
+      onChange={v => handleChange(key, v)}
+      type={(config[key] || '').startsWith('***') ? 'password' : 'text'}
+      placeholder="Not set"
+    />
+  );
 
-      {showNotification && (
-        <div className="p-4 bg-[#141C16] border border-[#27532B] rounded text-xs font-sans text-[#41A85C] flex items-center gap-2">
-          <Check className="w-4 h-4" /> Config file saved successfully to environment workspace variables!
+  return (
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+      <SectionHead
+        title="Settings"
+        note="Keys are written to the .env file beside the app on this machine, and never leave it."
+        right={
+          <button className="btn btn-primary cut-sm" disabled={isSaving} onClick={handleSave}>
+            <span className="flex items-center gap-2">
+              {isSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              {isSaving ? 'Saving…' : 'Save'}
+            </span>
+          </button>
+        }
+      />
+
+      {saved && (
+        <div className="callout mb-6">
+          <span className="cd" />
+          <span className="flex items-center gap-3">
+            <span className="tag good">
+              <i />
+              Written
+            </span>
+            Configuration saved to .env.
+          </span>
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        <div className="space-y-6">
-          <div className="bg-[#1A1A17] border border-[#2D2D2A] rounded p-6">
-            <h3 className="text-xs font-sans uppercase tracking-widest text-[#EAE5DB] border-b border-[#2D2D2A] pb-3 mb-5">Model Keys</h3>
-            <div className="space-y-5">
-              <Input label="Google Gemini API Key" value={config.GEMINI_API_KEY || ''} onChange={v => handleChange('GEMINI_API_KEY', v)} />
-              <Input label="NVIDIA NIM API Key" value={config.NVIDIA_API_KEY || ''} onChange={v => handleChange('NVIDIA_API_KEY', v)} />
-              <Input label="Mistral API Key" value={config.MISTRAL_API_KEY || ''} onChange={v => handleChange('MISTRAL_API_KEY', v)} />
-              <Input label="Groq API Key" value={config.GROQ_API_KEY || ''} onChange={v => handleChange('GROQ_API_KEY', v)} />
-              <Input label="Cerebras API Key" value={config.CEREBRAS_API_KEY || ''} onChange={v => handleChange('CEREBRAS_API_KEY', v)} />
-            </div>
+      <LockPanel />
+
+      <Frame title="The vault" className="mb-6">
+        <p className="sec-note">
+          Entries are plain markdown files with front matter. You can read them with anything, back them up with
+          <code> cp</code>, and nothing here depends on this app still existing.
+        </p>
+        <div className="grid g3">
+          <div className="tile">
+            <p className="k">Location</p>
+            <p className="v" style={{ fontSize: 'var(--step-0)', wordBreak: 'break-all' }}>
+              {vault ? vault.dir : '—'}
+            </p>
+          </div>
+          <div className="tile">
+            <p className="k">Entries</p>
+            <p className="v">{vault ? vault.count : '—'}</p>
+          </div>
+          <div className="tile">
+            <p className="k">Recordings kept</p>
+            <p className="v" style={{ fontSize: 'var(--step-1)' }}>{vault ? (vault.keepAudio ? 'Yes' : 'No') : '—'}</p>
+          </div>
+        </div>
+        <p className="fhint mt-4">
+          Trashed entries move to <code>.trash</code> inside that folder. Nothing in this app deletes anything.
+        </p>
+      </Frame>
+
+      <Frame title="Models" className="mb-6" lit={providers.localOnly}>
+        <p className="sec-note">
+          Any OpenAI-compatible endpoint works, so a model running on this machine and a model running in someone
+          else's datacentre are configured the same way. Ollama, LM Studio, llama.cpp and vLLM all speak it, and so do
+          the local Whisper servers.
+        </p>
+
+        <div style={{ marginBottom: 'var(--gap)' }}>
+          <p className="k" style={{ marginBottom: 6 }}>Where models run</p>
+          <Picker
+            id="pick-routing"
+            value={config.MODEL_ROUTING || 'cloud-first'}
+            onChange={v => handleChange('MODEL_ROUTING', v)}
+            groups={[
+              {
+                options: [
+                  { value: 'cloud-first', label: 'Cloud first' },
+                  { value: 'local-first', label: 'Local first' },
+                  { value: 'local-only', label: 'Local only' },
+                ],
+              },
+            ]}
+          />
+          <p className="fhint" style={{ marginTop: 6 }}>
+            {ROUTING_NOTE[(config.MODEL_ROUTING || 'cloud-first') as keyof typeof ROUTING_NOTE]}
+          </p>
+        </div>
+
+        {config.MODEL_ROUTING === 'local-only' && (
+          <div className="callout warn">
+            <span className="cd" />
+            <span>
+              Local-only is on. Archiving to Google Drive is refused while it is, and the vault on this disk is the
+              only copy — back the folder up yourself.
+            </span>
+          </div>
+        )}
+
+        <div className="grid g2">
+          <div>
+            <p className="k" style={{ marginBottom: 6 }}>Local models</p>
+            <Field
+              label="Endpoint"
+              value={config.LOCAL_CHAT_BASE_URL || ''}
+              onChange={v => handleChange('LOCAL_CHAT_BASE_URL', v)}
+              placeholder="http://localhost:11434/v1"
+            />
+            <Field
+              label="Model"
+              value={config.LOCAL_CHAT_MODEL || ''}
+              onChange={v => handleChange('LOCAL_CHAT_MODEL', v)}
+              placeholder="llama3.1:8b"
+            />
+            <Field
+              label="Name it (optional)"
+              value={config.LOCAL_CHAT_LABEL || ''}
+              onChange={v => handleChange('LOCAL_CHAT_LABEL', v)}
+              placeholder="Local"
+            />
+          </div>
+
+          <div>
+            <p className="k" style={{ marginBottom: 6 }}>Local transcription</p>
+            <Field
+              label="Endpoint"
+              value={config.LOCAL_STT_BASE_URL || ''}
+              onChange={v => handleChange('LOCAL_STT_BASE_URL', v)}
+              placeholder="http://localhost:8000/v1"
+            />
+            <Field
+              label="Model"
+              value={config.LOCAL_STT_MODEL || ''}
+              onChange={v => handleChange('LOCAL_STT_MODEL', v)}
+              placeholder="Systran/faster-whisper-large-v3"
+            />
+            <p className="fhint">
+              Speaches, faster-whisper-server and whisper.cpp all expose an OpenAI-compatible
+              <code> /v1/audio/transcriptions</code>.
+            </p>
           </div>
         </div>
 
-        <div className="space-y-6">
-          <div className="bg-[#1A1A17] border border-[#2D2D2A] rounded p-6">
-            <h3 className="text-xs font-sans uppercase tracking-widest text-[#EAE5DB] border-b border-[#2D2D2A] pb-3 mb-5">Google Drive & Docs</h3>
-            <div className="space-y-5">
-              <Input label="OAuth Client ID" value={config.GOOGLE_CLIENT_ID || ''} onChange={v => handleChange('GOOGLE_CLIENT_ID', v)} />
-              <Input label="OAuth Client Secret" value={config.GOOGLE_CLIENT_SECRET || ''} onChange={v => handleChange('GOOGLE_CLIENT_SECRET', v)} />
+        <div style={{ marginTop: 'var(--gap)' }}>
+          <div className="flex items-center justify-between" style={{ marginBottom: 6 }}>
+            <p className="k">What answered last time it was asked</p>
+            <button className="btn btn-sm cut-sm" onClick={reloadProviders}>
+              <span className="flex items-center gap-2">
+                <RefreshCw className="w-3 h-3" />
+                Recheck
+              </span>
+            </button>
+          </div>
+
+          {providers.providers.length === 0 ? (
+            <div className="empty w-full">
+              <span className="emptymark cut" />
+              <span className="fhint">
+                Nothing configured. Add a key below, or point the app at a local runtime above.
+              </span>
             </div>
-            
-            <div className="mt-8 pt-6 border-t border-[#2D2D2A]">
-              <p className="text-xs font-sans text-[#8B8B7A] mb-4">Connect My Story to write and edit directly inside your personal Google Drive and Google Docs space.</p>
-              
-              <div className="flex flex-col gap-3">
-                {googleToken ? (
-                  <div className="p-3 bg-[#1E1111] border border-[#532727] rounded text-xs font-sans flex flex-col gap-2">
-                    <p className="text-[#8B8B7A]">Linked as: <span className="text-[#802829] font-bold">{userEmail}</span></p>
-                    <button 
-                      onClick={onDisconnect}
-                      className="w-full py-2 border border-[#802829]/40 text-[#802829] hover:bg-[#802829] hover:text-[#141412] rounded text-[10px] font-bold uppercase tracking-widest font-sans transition-colors"
-                    >
-                      Disconnect Account
-                    </button>
-                  </div>
-                ) : (
-                  <button 
-                    onClick={onLinkGoogle}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[#802829] text-[#141412] hover:bg-[#943132] rounded text-[11px] font-bold font-sans uppercase tracking-widest transition-colors"
-                  >
-                    Link Google Account
+          ) : (
+            <div className="flex flex-col gap-2">
+              {providers.providers.map(p => (
+                <div key={p.id} className="flex items-center justify-between gap-3">
+                  <span className="flex items-center gap-2">
+                    <span className={`tag${p.error ? '' : p.reachable === false ? ' bad' : ' good'}`}>
+                      <i />
+                      {p.label}
+                    </span>
+                    {p.local && <span className="fhint">on this machine</span>}
+                  </span>
+                  <span className="fhint" style={{ textAlign: 'right' }}>
+                    {p.error
+                      ? p.error
+                      : p.reachable === false
+                        ? 'Not answering'
+                        : p.models.length
+                          ? `${p.models.length} model${p.models.length === 1 ? '' : 's'} available`
+                          : 'Configured'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {providers.providers.some(p => p.local && p.models.length > 0) && (
+            <p className="fhint" style={{ marginTop: 8 }}>
+              Installed locally:{' '}
+              {providers.providers
+                .filter(p => p.local)
+                .flatMap(p => p.models)
+                .slice(0, 12)
+                .join(', ')}
+            </p>
+          )}
+        </div>
+      </Frame>
+
+      <Frame title="Which model does which job" className="mb-6">
+        <p className="sec-note">
+          Five jobs, each with a first choice and two fallbacks. If the first
+          cannot answer — out of quota, retired, switched off — the second is
+          tried, then the third, and the app says which one answered.
+        </p>
+
+        <div className="callout">
+          <span className="cd" />
+          <span className="flex items-center justify-between gap-3 w-full">
+            <span>
+              {providers.loaded
+                ? 'Model lists came from the providers themselves.'
+                : 'Model names are never guessed here. Ask each provider what it actually has.'}
+            </span>
+            <button className="btn btn-primary cut-sm" disabled={loadingModels} onClick={() => void reloadProviders(true)}>
+              <span className="flex items-center gap-2">
+                {loadingModels ? <RefreshCw className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
+                {loadingModels ? 'Asking…' : 'Load models'}
+              </span>
+            </button>
+          </span>
+        </div>
+
+        {providers.providers.filter(p => p.error && !p.blocked).map(p => (
+          <div key={p.id} className="callout warn">
+            <span className="cd" />
+            <span>
+              <b>{p.label}.</b> {p.error}
+            </span>
+          </div>
+        ))}
+
+        {modelOptions.length === 0 ? (
+          <div className="empty w-full">
+            <span className="emptymark cut" />
+            <span className="fhint">
+              No models to assign yet. Add a key below, or a local endpoint above, then press Load models.
+            </span>
+          </div>
+        ) : (
+          providers.tasks.map(job => (
+            <div key={job.id} style={{ marginBottom: 'var(--gap)' }}>
+              <div className="flex items-center justify-between gap-3" style={{ marginBottom: 4 }}>
+                <p className="k">{job.label}</p>
+                {job.id !== 'transcribe' && (
+                  <button className="btn btn-sm cut-sm" onClick={() => void testJob(job.id)} disabled={testing === job.id}>
+                    <span className="flex items-center gap-2">
+                      {testing === job.id ? <RefreshCw className="w-3 h-3 animate-spin" /> : null}
+                      {testing === job.id ? 'Trying…' : 'Try it'}
+                    </span>
                   </button>
                 )}
-                
-                <a 
-                  href="https://drive.google.com/drive/my-drive" 
-                  target="_blank" 
-                  rel="noreferrer" 
-                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[#211414] border border-[#802829]/30 text-[#802829] hover:bg-[#802829] hover:text-[#141412] rounded text-[11px] font-sans uppercase tracking-widest transition-all"
-                >
-                  Go to Saved Memories Folder in Drive ↗
-                </a>
+              </div>
+              <p className="fhint" style={{ marginBottom: 8 }}>{job.blurb}</p>
 
-                <a 
-                  href="https://drive.google.com/" 
-                  target="_blank" 
-                  rel="noreferrer" 
-                  className="w-full flex items-center justify-center gap-2 px-4 py-3 border border-[#2D2D2A] text-[#C5BDB0] hover:bg-[#1E1E1C] rounded text-[11px] font-sans uppercase tracking-widest transition-all"
+              <div className="grid g3">
+                {[1, 2, 3].map(n => (
+                  <div key={n}>
+                    <p className="flabel">{n === 1 ? 'First choice' : `Fallback ${n - 1}`}</p>
+                    <Picker
+                      id={`pick-${job.id}-${n}`}
+                      value={config[`MODEL_${job.id.toUpperCase()}_${n}`] || ''}
+                      onChange={v => handleChange(`MODEL_${job.id.toUpperCase()}_${n}`, v)}
+                      groups={[{ options: [{ value: '', label: '— none —' }] }, ...modelOptions]}
+                    />
+                  </div>
+                ))}
+              </div>
+
+              {testResult[job.id] && (
+                <p className="fhint" style={{ marginTop: 6 }}>
+                  {testResult[job.id]}
+                </p>
+              )}
+            </div>
+          ))
+        )}
+
+        <p className="fhint">
+          Leave a job entirely blank and the app picks for itself, trying whatever
+          is configured. Assigning it is how you stop it choosing something you
+          did not want to pay for.
+        </p>
+      </Frame>
+
+      <div className="grid g2">
+        <Frame title="Provider keys">
+          {keyField('Google Gemini', 'GEMINI_API_KEY')}
+          {keyField('Groq', 'GROQ_API_KEY')}
+          {keyField('Mistral', 'MISTRAL_API_KEY')}
+          {keyField('NVIDIA NIM', 'NVIDIA_API_KEY')}
+          {keyField('Cerebras', 'CEREBRAS_API_KEY')}
+          <p className="k" style={{ margin: 'var(--gap) 0 6px' }}>OmniRoute</p>
+          <p className="fhint" style={{ marginBottom: 8 }}>
+            A gateway you run yourself, fronting many providers at once. Leave the
+            endpoint blank for <code>http://localhost:20128/v1</code>, or point it at
+            the machine running it.
+          </p>
+          <Field
+            label="Endpoint"
+            value={config.OMNIROUTE_BASE_URL || ''}
+            onChange={v => handleChange('OMNIROUTE_BASE_URL', v)}
+            placeholder="http://localhost:20128/v1"
+          />
+          {keyField('Its key', 'OMNIROUTE_API_KEY')}
+          <div className="callout warn">
+            <span className="cd" />
+            <span>
+              OmniRoute runs on your hardware but forwards to cloud providers, so it
+              counts as cloud here and is switched off under local-only routing. Its
+              transcription endpoint returns English — if you record in Greek and
+              want the Greek kept, give transcription a Whisper model instead.
+            </span>
+          </div>
+
+          <p className="k" style={{ margin: 'var(--gap) 0 6px' }}>OpenRouter</p>
+          {keyField('OpenRouter', 'OPENROUTER_API_KEY')}
+          <p className="fhint">
+            OpenRouter fronts hundreds of models behind one key, which makes it the
+            cheapest way to try a model this app has never heard of.
+          </p>
+
+          <p className="k" style={{ margin: 'var(--gap) 0 6px' }}>Any other OpenAI-compatible endpoint</p>
+          <p className="fhint" style={{ marginBottom: 8 }}>
+            A gateway, a company proxy, or a service that appeared after this
+            shipped. If it speaks the OpenAI shape, it works here with no code
+            change — only a URL.
+          </p>
+          <Field
+            label="Endpoint"
+            value={config.CUSTOM_BASE_URL || ''}
+            onChange={v => handleChange('CUSTOM_BASE_URL', v)}
+            placeholder="https://example.com/v1"
+          />
+          <Field
+            label="Name it"
+            value={config.CUSTOM_LABEL || ''}
+            onChange={v => handleChange('CUSTOM_LABEL', v)}
+            placeholder="Custom endpoint"
+          />
+          {keyField('Its key', 'CUSTOM_API_KEY')}
+        </Frame>
+
+        <Frame title="Google account" lit={google.connected && !providers.localOnly}>
+          <p className="sec-note">
+            Archiving writes into your own Drive and Docs. The link is held by this server as a refresh token, so it
+            does not expire after an hour the way the old sign-in did.
+          </p>
+
+          {google.connected ? (
+            <>
+              <div className="callout">
+                <span className="cd" />
+                <span className="flex items-center gap-3">
+                  <span className="tag good">
+                    <i />
+                    Linked
+                  </span>
+                  {google.email}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <button className="btn btn-crit cut-sm" onClick={onDisconnect}>
+                  Unlink
+                </button>
+                <a
+                  className="btn btn-sm cut-sm no-underline"
+                  href="https://drive.google.com/drive/my-drive"
+                  target="_blank"
+                  rel="noreferrer"
                 >
-                  Open Drive Homepage ↗
+                  <span className="flex items-center gap-2">
+                    Open Drive <ExternalLink className="w-3 h-3" />
+                  </span>
                 </a>
               </div>
-            </div>
-          </div>
-        </div>
+            </>
+          ) : (
+            <>
+              <p className="fhint mb-4">
+                Create an OAuth client (type: Web application) in the Google Cloud console, add this app's
+                <code> /auth/callback </code> as an authorised redirect URI, and paste the two values below. Google
+                only accepts https origins or localhost, so on a headless box link the account once from a browser on
+                that machine.
+              </p>
+              <Field
+                label="OAuth client ID"
+                value={config.GOOGLE_CLIENT_ID || ''}
+                onChange={v => handleChange('GOOGLE_CLIENT_ID', v)}
+                placeholder="Not set"
+              />
+              <Field
+                label="OAuth client secret"
+                value={config.GOOGLE_CLIENT_SECRET || ''}
+                onChange={v => handleChange('GOOGLE_CLIENT_SECRET', v)}
+                type={(config.GOOGLE_CLIENT_SECRET || '').startsWith('***') ? 'password' : 'text'}
+                placeholder="Not set"
+              />
+              {!google.configured && (
+                <div className="callout warn">
+                  <span className="cd" />
+                  <span>Save the client ID and secret before linking.</span>
+                </div>
+              )}
+              <button className="btn btn-primary cut-sm" disabled={!google.configured} onClick={onLinkGoogle}>
+                <span className="flex items-center gap-2">
+                  <BookOpen className="w-4 h-4" />
+                  Link Google account
+                </span>
+              </button>
+            </>
+          )}
+        </Frame>
       </div>
     </motion.div>
-  );
-}
-
-function Input({ label, value, onChange }: any) {
-  return (
-    <div>
-      <label className="block text-[10px] font-sans uppercase tracking-widest text-[#8B8B7A] mb-2">{label}</label>
-      <input 
-        type={value.includes('***') ? "password" : "text"}
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        className="w-full bg-[#121210] border border-[#2D2D2A] rounded px-3 py-2 text-sm text-[#C5BDB0] font-sans focus:outline-none focus:border-[#802829]/60"
-      />
-    </div>
   );
 }
