@@ -1,0 +1,18 @@
+{
+  "name": "My Story",
+  "short_name": "My Story",
+  "description": "A private vault for recording your own life, in your own words, on hardware you own.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#1a0a0d",
+  "theme_color": "#1a0a0d",
+  "categories": ["productivity", "lifestyle"],
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

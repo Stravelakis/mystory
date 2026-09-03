@@ -1,13 +1,44 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-way="oxblood" data-dress="full">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My Google AI Studio App</title>
+    <!-- viewport-fit=cover lets the layout reach under a notch; mobile.css
+         pays it back with env(safe-area-inset-*). maximum-scale is deliberately
+         NOT set: pinch-zoom is an accessibility feature, and the 16px input
+         rule in mobile.css is what actually stops Safari zooming on focus. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>My Story</title>
+    <meta
+      name="description"
+      content="A private vault for recording your own life, in your own words, on hardware you own."
+    />
+
+    <!-- Installable. On a phone this is what turns a tab into an app: full
+         screen, own icon, own task-switcher entry, no address bar in the way
+         of a recording. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#1a0a0d" />
+    <link rel="icon" href="/icon-192.png" sizes="192x192" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="My Story" />
+
+    <!-- A journal should not turn up in a search result or a link preview. -->
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="referrer" content="no-referrer" />
+
+    <!-- Poiret One: the ornamental face, for type read once (wordmark, panel
+         titles) and never for a control. Self-host the woff2 if this ever has
+         to run offline — the fallback is a serif and the brand looks wrong
+         with no error. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Poiret+One&display=swap" rel="stylesheet" />
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

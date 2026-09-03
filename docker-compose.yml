@@ -1,0 +1,48 @@
+# =============================================================================
+# My Story — one-command self-host.
+#
+#   docker compose up -d       start it
+#   docker compose logs -f     watch the boot log (it tells you if it is open)
+#   docker compose down        stop it. Your vault is untouched.
+#
+# The vault and the .env are bind mounts in this directory, so everything that
+# matters is a folder you can copy, and nothing that matters lives in Docker.
+# =============================================================================
+
+services:
+  mystory:
+    build: .
+    # Or, once you have published an image:
+    # image: ghcr.io/stravelakis/mystory:latest
+    container_name: mystory
+    restart: unless-stopped
+
+    ports:
+      # Bound to loopback on purpose. Reach it from your phone over Tailscale
+      # (see DEPLOY.md), or change this to "3000:3000" if you have decided your
+      # LAN is somewhere this may answer.
+      - '127.0.0.1:3000:3000'
+
+    volumes:
+      - ./vault:/app/vault
+      # Settings writes provider keys and the passcode hash here. `touch .env`
+      # before the first start, or Docker will helpfully create a directory.
+      - ./.env:/app/.env
+
+    environment:
+      - VAULT_DIR=/app/vault
+      # Keep the original recordings. "off" to stop.
+      - VAULT_KEEP_AUDIO=on
+
+    # A local model runtime on the host — Ollama, LM Studio, llama.cpp — is
+    # reachable from inside the container at this name. Set the endpoint in
+    # Settings to http://host.docker.internal:11434/v1
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3000/api/auth/status >/dev/null 2>&1 || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
