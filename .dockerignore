@@ -1,0 +1,10 @@
+node_modules
+dist
+vault
+.env
+.env.*
+!.env.example
+.git
+*.log
+*.bak
+.claude

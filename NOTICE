@@ -1,0 +1,49 @@
+My Story
+Copyright 2026 stravelakis
+
+This product includes software developed for the My Story project
+(https://github.com/Stravelakis/mystory).
+
+Interface design: Deco Noir, by the same author, vendored into
+src/styles/deco-noir.css rather than depended on.
+
+--------------------------------------------------------------------------
+WHAT THIS FILE IS, AND WHY IT MATTERS
+--------------------------------------------------------------------------
+
+This is the NOTICE file required by section 4(d) of the Apache License 2.0.
+
+If you redistribute this software, or any work derived from it, in source
+or binary form, you MUST include the attribution notices above. They have
+to appear in at least one of these places:
+
+  · a NOTICE file distributed alongside your work, or
+  · your documentation, if you provide documentation, or
+  · a credits or "about" screen inside your work, if such a screen exists.
+
+This obligation is separate from, and additional to, keeping the LICENSE
+file. Removing this file from a distribution is a licence violation.
+
+You may add your own attribution notices next to these ones. You may not
+modify or remove the ones above, and you may not present them in a way
+that suggests this project endorses your work.
+
+--------------------------------------------------------------------------
+IF YOU ARE JUST USING THE APP
+--------------------------------------------------------------------------
+
+None of the above applies to you. Run it, write in it, change it for your
+own use, do whatever you like. The obligations start only when you pass it
+on to someone else.
+
+--------------------------------------------------------------------------
+ONE THING THAT IS NOT A LICENCE TERM
+--------------------------------------------------------------------------
+
+This app is built to be run by the person whose life is in it, on hardware
+they control. The licence permits you to host it for other people. If you
+do, understand what you are taking on: the entries are an account of
+somebody's worst years, naming people who never consented to being named,
+and in the EU that is special-category data under Article 9 of the GDPR.
+
+Nothing here stops you. It is asked of you.

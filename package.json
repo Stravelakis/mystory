@@ -1,6 +1,6 @@
 {
-  "name": "react-example",
-  "private": true,
+  "name": "mystory",
+  "private": false,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
@@ -9,7 +9,9 @@
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "icons": "node scripts/gen-icons.cjs public",
+    "gemini:doctor": "node scripts/gemini-doctor.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -17,7 +19,6 @@
     "@vitejs/plugin-react": "^5.0.4",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
-    "firebase": "^12.15.0",
     "googleapis": "^173.0.0",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
@@ -38,5 +39,24 @@
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.3"
-  }
+  },
+  "description": "A private vault for recording your own life, in your own words, on hardware you own.",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Stravelakis/mystory.git"
+  },
+  "keywords": [
+    "journal",
+    "vault",
+    "self-hosted",
+    "local-first",
+    "ollama",
+    "whisper",
+    "privacy"
+  ],
+  "author": "stravelakis"
 }

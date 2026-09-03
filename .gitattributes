@@ -1,0 +1,7 @@
+# Line endings are normalised in the repository and checked out native, so a
+# contributor on Windows and one on Linux stop producing whole-file diffs.
+* text=auto eol=lf
+
+*.png binary
+*.webm binary
+*.woff2 binary
