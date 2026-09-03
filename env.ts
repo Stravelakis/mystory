@@ -110,10 +110,31 @@ export async function loadConfig(): Promise<Record<string, string>> {
   return merged;
 }
 
+/** Writes the file AND updates process.env for the same keys.
+ *
+ *  Both halves are required, and it is not obvious why. `dotenv.config()` runs
+ *  at boot and copies .env into process.env; `loadConfig()` then layers
+ *  process.env *over* the file, so that a real environment variable can
+ *  override a stored one. Writing only the file therefore left every setting
+ *  that existed at boot permanently unchangeable from the Settings screen —
+ *  you saved a key, the file changed, and loadConfig went on returning the
+ *  stale boot value until the next restart.
+ *
+ *  Found on 3 Sep 2026 while a model assignment refused to change: the app
+ *  reported running gemma-4-31b when the request had asked for
+ *  gemini-3.8-flash. The failure mode is worse than it sounds, because a user
+ *  pasting a corrected API key sees nothing happen and concludes the key is
+ *  wrong. */
 export async function saveConfig(newConfig: any): Promise<void> {
   const merged = await readEnvFile();
   for (const key of CONFIG_KEYS) {
-    if (typeof newConfig[key] === 'string') merged[key] = newConfig[key];
+    if (typeof newConfig[key] === 'string') {
+      merged[key] = newConfig[key];
+      // An empty value means "unset", and an empty string in process.env is
+      // falsy to loadConfig anyway — delete it so the file is the only source.
+      if (newConfig[key] === '') delete process.env[key];
+      else process.env[key] = newConfig[key];
+    }
   }
   await writeEnvFile(merged);
 }
