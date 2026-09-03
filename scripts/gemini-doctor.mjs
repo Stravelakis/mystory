@@ -301,13 +301,17 @@ say(`${C.b}1. Free tier and Cloud billing are mutually exclusive.${C.x}
    Credit elsewhere in the same organisation does not apply.`);
 
 say(`
-${C.b}2. "Live" and "transcribe" models are a different API.${C.x}
-   Names like gemini-*-live-* and *-transcribe use bidiGenerateContent — a
+${C.b}2. Only the "-live" models are a different API.${C.x}
+   Anything listed above under "Live / realtime" uses bidiGenerateContent — a
    streaming WebSocket protocol, not the request/response endpoint this app
-   speaks. They will not appear as assignable models here even when your key
-   has them, and that is correct rather than a bug.
-   For transcription this app uses Whisper (Groq, or local) and Gemini's
-   ordinary generateContent audio input, both of which work fine.`);
+   speaks. Those will not appear as assignable models, and that is correct
+   rather than a bug.
+
+   Do not read "transcribe" as meaning realtime: on this key
+   gemini-3.5-transcribe supports ordinary generateContent and IS usable here,
+   while gemini-3.5-transcribe-live is the WebSocket one. The suffix that
+   decides it is -live, not the word transcribe. Which section a model was
+   printed in above is the answer, not its name.`);
 
 if (anyMissing) {
   say(`
