@@ -89,6 +89,29 @@ export interface ChatRequest {
   providerId?: string;
 }
 
+/** How much room each job needs to answer in.
+ *
+ *  Sending nothing here means the provider picks, and some pick very little:
+ *  LocalAI truncated indicator runs to a few hundred tokens, which is fine for
+ *  a plain model and useless for a reasoning one. Verified on 3 Sep 2026:
+ *  ornith-1.0-9b needed 1,494 completion tokens to tag a two-sentence entry,
+ *  because all but the last few went on its chain of thought. At the provider
+ *  default it returned nothing at all, and the app reported no indicators
+ *  rather than a failure.
+ *
+ *  These are ceilings, not targets. A model that answers in twenty tokens
+ *  still costs twenty, so a generous indicators ceiling is free on a cloud
+ *  model and is the difference between working and not on a local reasoning
+ *  one — ornith-1.0-9b used 1,494 tokens on one run of the same entry and
+ *  more than 3,000 on the next. */
+const MAX_TOKENS: Record<Task, number> = {
+  indicators: 8000,
+  companion: 1500,
+  title: 1000,
+  synthesis: 8000,
+  transcribe: 0, // not a chat call
+};
+
 export const ROUTINGS: Routing[] = ['cloud-first', 'local-first', 'local-only'];
 
 export function readRouting(config: Record<string, string>): Routing {
@@ -451,12 +474,34 @@ class ProviderError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /** The call succeeded and the model said nothing usable, as opposed to the
+     *  provider refusing. Only these are worth retrying differently. */
+    readonly emptyAnswer = false,
   ) {
     super(message);
   }
 }
 
+/** Some runtimes implement JSON mode by constraining the sampler, and a model
+ *  that likes to think first then emits almost nothing — LocalAI with
+ *  ornith-1.0-9b returned 51 tokens and an empty answer with json_object set,
+ *  and a full, correct answer without it (3 Sep 2026). JSON mode was always
+ *  documented here as asked for and never depended on, since every caller
+ *  parses defensively. So when it produces nothing, ask again without it
+ *  rather than reporting a failure. STANDARDS #11. */
 async function openaiChat(p: Provider, model: string, req: ChatRequest): Promise<string> {
+  try {
+    return await openaiChatOnce(p, model, req);
+  } catch (err: any) {
+    if (req.json && err instanceof ProviderError && err.emptyAnswer) {
+      console.warn(`[${req.task}] ${p.id}/${model} returned nothing in JSON mode; retrying without it.`);
+      return openaiChatOnce(p, model, { ...req, json: false });
+    }
+    throw err;
+  }
+}
+
+async function openaiChatOnce(p: Provider, model: string, req: ChatRequest): Promise<string> {
   const body: any = {
     model,
     messages: [{ role: 'user', content: req.prompt }],
@@ -468,7 +513,10 @@ async function openaiChat(p: Provider, model: string, req: ChatRequest): Promise
     // here consumes a stream, so every provider is asked for a whole answer.
     stream: false,
   };
-  if (req.maxTokens) body.max_tokens = req.maxTokens;
+  // The caller's budget wins; otherwise the job's own, so that a reasoning
+  // model has room to think AND answer.
+  const budget = req.maxTokens ?? MAX_TOKENS[req.task];
+  if (budget) body.max_tokens = budget;
   // Not every runtime implements JSON mode. Asked for, never depended on:
   // the callers all parse defensively.
   if (req.json) body.response_format = { type: 'json_object' };
@@ -498,6 +546,8 @@ async function openaiChat(p: Provider, model: string, req: ChatRequest): Promise
   // its entire output budget thinking and never got to the answer. The same
   // request also reported prompt_tokens 2124 for a six-word prompt, because a
   // gateway can prepend a large preamble of its own.
+  // OmniRoute calls it reasoning_content; LocalAI calls it reasoning. Both
+  // mean the same thing: the model thought and did not get to an answer.
   const reasoning = choice?.message?.reasoning_content || choice?.message?.reasoning;
   const finish = choice?.finish_reason;
 
@@ -505,18 +555,19 @@ async function openaiChat(p: Provider, model: string, req: ChatRequest): Promise
     throw new ProviderError(
       `${model} is a reasoning model and used its whole output budget thinking, leaving no room for an answer. Give this job a larger budget, or assign it a non-reasoning model.`,
       0,
+      true,
     );
   }
   if (finish === 'length') {
-    throw new ProviderError(`${model} was cut off before it produced anything. Its output budget is too small for this job.`, 0);
+    throw new ProviderError(`${model} was cut off before it produced anything. Its output budget is too small for this job.`, 0, true);
   }
   if (reasoning) {
-    throw new ProviderError(`${model} returned only its reasoning and no answer. A different model will usually do better here.`, 0);
+    throw new ProviderError(`${model} returned only its reasoning and no answer. A different model will usually do better here.`, 0, true);
   }
   if (finish === 'content_filter') {
     throw new ProviderError(`${model} refused to answer on safety grounds. A different model will usually take it.`, 0);
   }
-  throw new ProviderError(`${model} returned an empty answer${finish ? ` (finished as "${finish}")` : ''}.`, 0);
+  throw new ProviderError(`${model} returned an empty answer${finish ? ` (finished as "${finish}")` : ''}.`, 0, true);
 }
 
 function parseJson(raw: string, label: string): any {
@@ -565,6 +616,8 @@ function joinSSE(raw: string, label: string): any {
 async function geminiChat(p: Provider, model: string, req: ChatRequest): Promise<string> {
   const ai = new GoogleGenAI({ apiKey: p.apiKey });
   const config: any = { temperature: req.temperature ?? 0.2 };
+  const budget = req.maxTokens ?? MAX_TOKENS[req.task];
+  if (budget) config.maxOutputTokens = budget;
   // Gemma models on this endpoint reject responseMimeType.
   if (req.json && !model.startsWith('gemma')) config.responseMimeType = 'application/json';
   try {

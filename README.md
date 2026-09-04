@@ -69,33 +69,48 @@ closed and say why.
 
 ### Running it entirely on your own machine
 
-Two pieces, both optional, both replaceable:
+Any OpenAI-compatible runtime works. Two common ones:
+
+**LocalAI** — one endpoint for both chat and transcription, which is why it is
+listed first here.
 
 ```bash
-# Models — Ollama is the least trouble
-ollama serve
-ollama pull llama3.1:8b
+local-ai run
+```
 
-# Transcription — anything with an OpenAI-compatible /v1/audio/transcriptions
+| Settings → Models | |
+|---|---|
+| Where models run | `Local only` |
+| Local models → Endpoint | `http://localhost:8080/v1` |
+| Local models → Model | press **Load models** and pick one |
+| Local transcription → Endpoint | `http://localhost:8080/v1` (once a Whisper model is installed) |
+
+**Ollama** — no transcription of its own, so it needs a Whisper server beside it.
+
+```bash
+ollama serve && ollama pull llama3.1:8b
 docker run -d -p 8000:8000 ghcr.io/speaches-ai/speaches:latest-cpu
 ```
 
-Then in **Settings → Models**:
-
-| | |
+| Settings → Models | |
 |---|---|
-| Where models run | `Local only` |
 | Local models → Endpoint | `http://localhost:11434/v1` |
-| Local models → Model | `llama3.1:8b` |
 | Local transcription → Endpoint | `http://localhost:8000/v1` |
-| Local transcription → Model | `Systran/faster-whisper-large-v3` |
 
-The Settings screen lists what each endpoint actually has installed, so you can
-check rather than guess. Anything speaking the same protocol works in their
-place — LM Studio, llama.cpp's server, vLLM, LocalAI, whisper.cpp,
-faster-whisper-server.
+LM Studio (`:1234`), llama.cpp's server (`:8080`), vLLM and whisper.cpp all
+speak the same protocol and work the same way. Press **Load models** and the
+Settings screen lists what each endpoint actually has, so you never type a name
+from memory.
 
 Inside Docker, the host is `host.docker.internal` rather than `localhost`.
+
+**On small local models.** Indicator tagging is the hardest job here — it asks
+for structured output with exact quotes. A reasoning model needs room to think
+*and* answer, so the app gives that job a generous ceiling; a ceiling is not a
+cost, since a model that answers in twenty tokens still costs twenty. If a
+local model keeps returning nothing, the app now says which of those it is
+rather than reporting an empty result. Assigning a non-reasoning model to
+Indicators is usually the quickest fix.
 
 ### Which model does which job
 

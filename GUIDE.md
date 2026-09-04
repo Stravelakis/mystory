@@ -127,7 +127,7 @@ Three ways to run the thinking part:
 
 | | Costs | Privacy |
 |---|---|---|
-| **On your own computer** (Ollama) | nothing, ever | nothing leaves the machine |
+| **On your own computer** (LocalAI, Ollama) | nothing, ever | nothing leaves the machine |
 | **A free cloud tier** (Google AI Studio, Groq) | nothing, with daily limits | your text goes to that company |
 | **A paid key** | what you choose | your text goes to that company |
 
@@ -158,6 +158,7 @@ from the list — that list is what your key can genuinely use today.
 | Transcription failed | **Your recording is safe.** It was written to disk before anything was sent anywhere. Try again, or pick a different engine. |
 | Forgot the passcode | Open `.env`, delete the `APP_PASSCODE_HASH=` line, save, restart. Entries untouched. |
 | It's very slow | A local model with no graphics card is slow. Give the small jobs a small model. |
+| Local model finds no indicators | It is the hardest job — structured output with exact quotes. The app will say whether the model ran out of room to answer or returned only its thinking. A non-reasoning model usually does better. |
 
 ---
 

@@ -77,16 +77,17 @@ back in.
 The app records and saves perfectly well with no model at all — it just cannot
 *transcribe* or *draft* until it has one. Pick whichever suits you:
 
-**A. Free, and nothing leaves your computer.** Install
-[Ollama](https://ollama.com), then:
+**A. Free, and nothing leaves your computer.** Either of these works:
 
-```bash
-ollama pull llama3.1:8b
-```
+- **[LocalAI](https://localai.io)** — `local-ai run`, then the endpoint is
+  `http://localhost:8080/v1`. It can do transcription from the same endpoint
+  too, once you have installed a Whisper model.
+- **[Ollama](https://ollama.com)** — `ollama pull llama3.1:8b`, endpoint
+  `http://localhost:11434/v1`. It has no transcription of its own.
 
-In **Settings → Models**: set *Where models run* to **Local only**, put
-`http://localhost:11434/v1` as the Local models endpoint, press **Load models**,
-and assign what appears to each job.
+In **Settings → Models**: set *Where models run* to **Local only**, put the
+endpoint in *Local models*, press **Load models**, and assign what appears to
+each job.
 
 **B. Free-ish, in the cloud.** Get a key from
 [Google AI Studio](https://aistudio.google.com/apikey) (free tier, no card) or
