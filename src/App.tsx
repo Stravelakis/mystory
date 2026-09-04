@@ -1,5 +1,17 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Settings, Mic, BookOpen, Save, StopCircle, RefreshCw, UploadCloud, FileText, ExternalLink } from 'lucide-react';
+import {
+  Settings,
+  Mic,
+  BookOpen,
+  Save,
+  StopCircle,
+  RefreshCw,
+  UploadCloud,
+  FileText,
+  ExternalLink,
+  Eye,
+  EyeOff,
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 /* =============================================================================
@@ -130,6 +142,7 @@ function Field({
   hint,
   type = 'text',
   placeholder,
+  secret = false,
 }: {
   label: string;
   value: string;
@@ -137,18 +150,49 @@ function Field({
   hint?: string;
   type?: string;
   placeholder?: string;
+  /** An API key. Hidden as you type, with a deliberate button to reveal it. */
+  secret?: boolean;
 }) {
+  // A pasted key used to sit on screen in plain text until the page was
+  // reloaded — long enough for a screen share, a photo, or someone walking
+  // past. Secrets are hidden from the keystroke, and revealing one is a choice
+  // you have to make.
+  const [shown, setShown] = useState(false);
+  const inputType = secret ? (shown ? 'text' : 'password') : type;
+
   return (
     <div className="field">
       <label>{label}</label>
-      <span className="inwrap cut-sm">
+      <span className="inwrap cut-sm" style={secret ? { display: 'flex', alignItems: 'center' } : undefined}>
         <input
           className="input"
-          type={type}
+          type={inputType}
           value={value}
           placeholder={placeholder}
+          autoComplete={secret ? 'off' : undefined}
+          autoCorrect={secret ? 'off' : undefined}
+          spellCheck={secret ? false : undefined}
           onChange={e => onChange(e.target.value)}
         />
+        {secret && (
+          <button
+            type="button"
+            onClick={() => setShown(v => !v)}
+            title={shown ? 'Hide' : 'Show'}
+            aria-label={shown ? 'Hide this key' : 'Show this key'}
+            style={{
+              background: 'none',
+              border: 0,
+              cursor: 'pointer',
+              color: 'var(--ink-3)',
+              padding: '0 .6rem',
+              display: 'flex',
+              alignItems: 'center',
+            }}
+          >
+            {shown ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          </button>
+        )}
       </span>
       {hint && <span className="fhint">{hint}</span>}
     </div>
@@ -1690,6 +1734,7 @@ function SynthesisStudio({ google }: { key?: string; google: GoogleStatus }) {
           )}
         </Frame>
       </div>
+
     </motion.div>
   );
 }
@@ -1893,27 +1938,37 @@ function SettingsCenter({ google, onLinkGoogle, onDisconnect, onGoogleChanged }:
 
   const handleSave = async () => {
     setIsSaving(true);
-    await fetch('/api/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(config),
-    });
-    setIsSaving(false);
-    setSaved(true);
-    // Routing or a local endpoint may have just changed what is reachable.
-    void reloadProviders(providers.loaded);
+    try {
+      await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } finally {
+      setIsSaving(false);
+    }
+
+    // Deliberately NOT a deep reload. Saving used to re-ask every configured
+    // provider for its whole model list, which on a set-up machine meant seven
+    // round trips — one of them a gateway that can take half a minute — before
+    // the screen settled. Asking what models exist is what "Load models" is
+    // for. This only refreshes the cheap reachability view.
+    void reloadProviders(false);
     // The OAuth client id may have just been filled in, which decides whether
     // linking is offered at all.
     void onGoogleChanged();
-    setTimeout(() => setSaved(false), 3000);
   };
 
+  // Always a secret, not only once it has come back from the server masked.
+  // The old version left a freshly pasted key in plain text on screen.
   const keyField = (label: string, key: string) => (
     <Field
       label={label}
       value={config[key] || ''}
       onChange={v => handleChange(key, v)}
-      type={(config[key] || '').startsWith('***') ? 'password' : 'text'}
+      secret
       placeholder="Not set"
     />
   );
@@ -1927,7 +1982,7 @@ function SettingsCenter({ google, onLinkGoogle, onDisconnect, onGoogleChanged }:
           <button className="btn btn-primary cut-sm" disabled={isSaving} onClick={handleSave}>
             <span className="flex items-center gap-2">
               {isSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-              {isSaving ? 'Saving…' : 'Save'}
+              {isSaving ? 'Saving…' : 'Save all'}
             </span>
           </button>
         }
@@ -2308,7 +2363,7 @@ function SettingsCenter({ google, onLinkGoogle, onDisconnect, onGoogleChanged }:
                 label="OAuth client secret"
                 value={config.GOOGLE_CLIENT_SECRET || ''}
                 onChange={v => handleChange('GOOGLE_CLIENT_SECRET', v)}
-                type={(config.GOOGLE_CLIENT_SECRET || '').startsWith('***') ? 'password' : 'text'}
+                secret
                 placeholder="Not set"
               />
               {!google.configured && (
@@ -2326,6 +2381,31 @@ function SettingsCenter({ google, onLinkGoogle, onDisconnect, onGoogleChanged }:
             </>
           )}
         </Frame>
+      </div>
+
+      <div
+        style={{
+          position: 'sticky',
+          bottom: 0,
+          zIndex: 20,
+          marginTop: 'var(--gap)',
+          padding: '.75rem 0 calc(.75rem + env(safe-area-inset-bottom))',
+          background:
+            'linear-gradient(to top, var(--ground) 62%, color-mix(in srgb, var(--ground) 80%, transparent))',
+          borderTop: 'var(--hair) solid rgb(var(--accent-rgb) / .24)',
+        }}
+      >
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <span className="fhint" style={{ margin: 0 }}>
+            {saved ? 'Saved to .env on this machine.' : 'Changes are not kept until you save.'}
+          </span>
+          <button className="btn btn-primary cut-sm" disabled={isSaving} onClick={handleSave}>
+            <span className="flex items-center gap-2">
+              {isSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              {isSaving ? 'Saving…' : 'Save all'}
+            </span>
+          </button>
+        </div>
       </div>
     </motion.div>
   );
