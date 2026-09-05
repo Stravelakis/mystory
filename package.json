@@ -11,7 +11,8 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "icons": "node scripts/gen-icons.cjs public",
-    "gemini:doctor": "node scripts/gemini-doctor.mjs"
+    "gemini:doctor": "node scripts/gemini-doctor.mjs",
+    "shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-shortcut.ps1"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

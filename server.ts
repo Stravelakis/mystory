@@ -89,7 +89,16 @@ const PORT = Number(process.env.PORT) || 4747;
 // 0.0.0.0 means every interface, which on a machine that is also on your home
 // LAN is more than the tailnet. Set HOST to the Tailscale address to publish
 // there and nowhere else.
-const HOST = process.env.HOST || '0.0.0.0';
+// Empty means "every interface, both address families". Node binds :: in
+// dual-stack mode when no host is given, which accepts IPv4 and IPv6 alike.
+//
+// It used to default to '0.0.0.0', which is IPv4 only. On Windows, localhost
+// resolves to ::1 before 127.0.0.1, so http://localhost:4747 hit a refused
+// IPv6 socket. Browsers retry the other family and appeared to work; anything
+// stricter — a health check, curl -6, a script — simply failed. Confirmed on
+// this machine 5 Sep 2026: [::1]:4747 actively refused while 127.0.0.1:4747
+// answered 200.
+const HOST = process.env.HOST || '';
 
 /** The redirect Google will send the consent response back to. Google only
  *  accepts https origins or localhost, so on a headless box this is normally
@@ -874,8 +883,8 @@ Ask a gentle, open-ended question or request in 1-2 sentences that helps them ex
     throw err;
   });
 
-  server.listen(PORT, HOST, async () => {
-    console.log(`My Story running on http://${HOST}:${PORT}`);
+  server.listen(PORT, HOST || undefined, async () => {
+    console.log(`My Story running on http://localhost:${PORT}` + (HOST ? ` (bound to ${HOST})` : ''));
     console.log(`Vault: ${VAULT_DIR}`);
     const boot = await loadConfig();
     const chain = await probe(boot);
@@ -885,10 +894,11 @@ Ask a gentle, open-ended question or request in 1-2 sentences that helps them ex
         (usable.length ? usable.map(p => p.label + (p.local ? ' (local)' : '')).join(', ') : 'none configured'),
     );
     const loopback = HOST === '127.0.0.1' || HOST === 'localhost' || HOST === '::1';
+    const where = HOST || 'every interface';
     if (!(await passcodeHash()) && !loopback) {
       console.warn(
-        `\n  !  No passcode is set, and this is listening on ${HOST}.\n` +
-        `     Anyone who can reach ${HOST}:${PORT} can read the vault.\n` +
+        `\n  !  No passcode is set, and this is listening on ${where}.\n` +
+        `     Anyone who can reach this machine on port ${PORT} can read the vault.\n` +
         `     Set one under Settings, or bind HOST to your Tailscale address.\n`
       );
     }

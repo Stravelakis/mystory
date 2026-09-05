@@ -105,6 +105,30 @@ to fix if it cannot.
 
 ---
 
+## 🖱️ A Desktop shortcut (Windows)
+
+So you do not have to open a terminal every time:
+
+```bash
+npm run shortcut
+```
+
+That puts **My Story** on your Desktop with the app's own icon. Double-click it
+and it starts the app if it is not already running, waits until it really
+answers, then opens your browser. Clicking it twice does not start a second
+copy — it finds the running one and opens a tab.
+
+The server runs with its window hidden, so to stop it afterwards:
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts/stop-mystory.ps1
+```
+
+That finds the process by the port it is listening on, so it cannot take out an
+unrelated `node.exe` you had running for something else.
+
+---
+
 ## 📁 Where your writing lives
 
 In a folder called `vault/` inside the project:
