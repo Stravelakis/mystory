@@ -16,3 +16,6 @@ vault/
 
 # Personal setup notes: these name your own machines and gateways.
 *.local.md
+
+# Local agent wiring: the path to Image Forge is specific to this machine.
+.mcp.json
