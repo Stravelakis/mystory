@@ -74,6 +74,8 @@ import {
   isLocalOnly,
   synthesisChoices,
   slotsFor,
+  resolveProviders,
+  listModels,
   TASKS,
   type Task,
 } from './providers.ts';
@@ -227,7 +229,18 @@ async function startServer() {
       return res.status(401).json({ success: false, error: 'Unlock first.' });
     }
 
-    const next = typeof req.body?.next === 'string' ? req.body.next : '';
+    // A missing field is not the same as an empty one. This used to coerce
+    // anything unrecognised to '' and silently REMOVE the lock, so a malformed
+    // request — a typo'd field name, an old client, a retry with the wrong
+    // body — quietly unlocked the vault and reported success.
+    if (!Object.prototype.hasOwnProperty.call(req.body ?? {}, 'next')) {
+      return res.status(400).json({
+        success: false,
+        error: 'Nothing to set. Send a passcode, or send an empty one to remove the lock on purpose.',
+      });
+    }
+
+    const next = typeof req.body.next === 'string' ? req.body.next : '';
 
     if (next === '') {
       await setEnvKey(PASSCODE_KEY, null);
@@ -441,6 +454,36 @@ async function startServer() {
       });
     } catch (e: any) {
       res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  /** Check ONE provider: is the key accepted, and what can it reach?
+   *
+   *  Pasting a key and having no way to tell whether it works is how someone
+   *  ends up assuming the app is broken. This asks the provider for its model
+   *  list — a plain GET that costs nothing — and reports the answer, or the
+   *  reason, in plain English. */
+  app.post('/api/providers/check', async (req, res) => {
+    const id = String(req.body?.id || '');
+    try {
+      const config = await loadConfig();
+      const provider = resolveProviders(config).find(p => p.id === id);
+      if (!provider) {
+        return res.json({
+          success: false,
+          error: 'Nothing is configured for that provider yet. Paste a key, or an endpoint, and save first.',
+        });
+      }
+      const models = await listModels(provider);
+      res.json({
+        success: true,
+        id,
+        label: provider.label,
+        count: models.length,
+        sample: models.slice(0, 6),
+      });
+    } catch (e: any) {
+      res.json({ success: false, id, error: e?.message || String(e) });
     }
   });
 

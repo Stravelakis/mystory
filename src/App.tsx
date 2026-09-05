@@ -1961,17 +1961,81 @@ function SettingsCenter({ google, onLinkGoogle, onDisconnect, onGoogleChanged }:
     void onGoogleChanged();
   };
 
+  const [checking, setChecking] = useState<string | null>(null);
+  const [checked, setChecked] = useState<Record<string, { ok: boolean; text: string }>>({});
+
+  /** Save, then ask that one provider what it can reach. Saving first matters:
+   *  otherwise the key you just pasted is still only in the browser and the
+   *  server would test the old one and tell you it works. */
+  const checkProvider = async (id: string) => {
+    setChecking(id);
+    setChecked(prev => ({ ...prev, [id]: { ok: false, text: 'Checking…' } }));
+    try {
+      await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      });
+      const d = await (
+        await fetch('/api/providers/check', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id }),
+        })
+      ).json();
+      setChecked(prev => ({
+        ...prev,
+        [id]: d.success
+          ? { ok: true, text: `Working — ${d.count} model${d.count === 1 ? '' : 's'} available.` }
+          : { ok: false, text: d.error },
+      }));
+      if (d.success) void reloadProviders(providers.loaded);
+    } catch (e: any) {
+      setChecked(prev => ({ ...prev, [id]: { ok: false, text: e?.message || 'Could not reach the app.' } }));
+    } finally {
+      setChecking(null);
+    }
+  };
+
   // Always a secret, not only once it has come back from the server masked.
   // The old version left a freshly pasted key in plain text on screen.
-  const keyField = (label: string, key: string) => (
-    <Field
-      label={label}
-      value={config[key] || ''}
-      onChange={v => handleChange(key, v)}
-      secret
-      placeholder="Not set"
-    />
-  );
+  //
+  // `provider` is the id this key belongs to; giving it one adds a Test button,
+  // because pasting a key with no way to tell whether it took is how someone
+  // concludes the whole app is broken.
+  const keyField = (label: string, key: string, provider?: string) => {
+    const result = provider ? checked[provider] : undefined;
+    return (
+      <div>
+        <Field
+          label={label}
+          value={config[key] || ''}
+          onChange={v => handleChange(key, v)}
+          secret
+          placeholder="Not set"
+        />
+        {provider && (
+          <div className="flex items-center gap-3 flex-wrap" style={{ margin: '-.6rem 0 1rem' }}>
+            <button
+              className="btn btn-sm cut-sm"
+              disabled={checking === provider || !(config[key] || '').trim()}
+              onClick={() => void checkProvider(provider)}
+            >
+              <span className="flex items-center gap-2">
+                {checking === provider ? <RefreshCw className="w-3 h-3 animate-spin" /> : null}
+                {checking === provider ? 'Testing…' : 'Test'}
+              </span>
+            </button>
+            {result && (
+              <span className={`fhint`} style={{ margin: 0, color: result.ok ? 'var(--good)' : 'var(--ink-2)' }}>
+                {result.text}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
@@ -2255,11 +2319,19 @@ function SettingsCenter({ google, onLinkGoogle, onDisconnect, onGoogleChanged }:
 
       <div className="grid g2">
         <Frame title="Provider keys">
-          {keyField('Google Gemini', 'GEMINI_API_KEY')}
-          {keyField('Groq', 'GROQ_API_KEY')}
-          {keyField('Mistral', 'MISTRAL_API_KEY')}
-          {keyField('NVIDIA NIM', 'NVIDIA_API_KEY')}
-          {keyField('Cerebras', 'CEREBRAS_API_KEY')}
+          {keyField('Google Gemini', 'GEMINI_API_KEY', 'gemini')}
+          {keyField('Groq', 'GROQ_API_KEY', 'groq')}
+          {keyField('Mistral', 'MISTRAL_API_KEY', 'mistral')}
+          {keyField('NVIDIA NIM', 'NVIDIA_API_KEY', 'nvidia')}
+          {keyField('Cerebras', 'CEREBRAS_API_KEY', 'cerebras')}
+          <p className="k" style={{ margin: 'var(--gap) 0 6px' }}>DeepL</p>
+          <p className="fhint" style={{ marginBottom: 8 }}>
+            For Greek entries. A translator rather than a language model, so it
+            renders what you said instead of rewriting it — which is the whole
+            point when the text is testimony. Optional.
+          </p>
+          {keyField('DeepL', 'DEEPL_API_KEY')}
+
           <p className="k" style={{ margin: 'var(--gap) 0 6px' }}>OmniRoute</p>
           <p className="fhint" style={{ marginBottom: 8 }}>
             A gateway you run yourself, fronting many providers at once. Leave the
@@ -2272,7 +2344,7 @@ function SettingsCenter({ google, onLinkGoogle, onDisconnect, onGoogleChanged }:
             onChange={v => handleChange('OMNIROUTE_BASE_URL', v)}
             placeholder="http://localhost:20128/v1"
           />
-          {keyField('Its key', 'OMNIROUTE_API_KEY')}
+          {keyField('Its key', 'OMNIROUTE_API_KEY', 'omniroute')}
           <div className="callout warn">
             <span className="cd" />
             <span>
@@ -2284,7 +2356,7 @@ function SettingsCenter({ google, onLinkGoogle, onDisconnect, onGoogleChanged }:
           </div>
 
           <p className="k" style={{ margin: 'var(--gap) 0 6px' }}>OpenRouter</p>
-          {keyField('OpenRouter', 'OPENROUTER_API_KEY')}
+          {keyField('OpenRouter', 'OPENROUTER_API_KEY', 'openrouter')}
           <p className="fhint">
             OpenRouter fronts hundreds of models behind one key, which makes it the
             cheapest way to try a model this app has never heard of.
@@ -2308,7 +2380,7 @@ function SettingsCenter({ google, onLinkGoogle, onDisconnect, onGoogleChanged }:
             onChange={v => handleChange('CUSTOM_LABEL', v)}
             placeholder="Custom endpoint"
           />
-          {keyField('Its key', 'CUSTOM_API_KEY')}
+          {keyField('Its key', 'CUSTOM_API_KEY', 'custom')}
         </Frame>
 
         <Frame title="Google account" lit={google.connected && !providers.localOnly}>
