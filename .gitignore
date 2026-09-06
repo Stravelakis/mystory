@@ -19,3 +19,7 @@ vault/
 
 # Local agent wiring: the path to Image Forge is specific to this machine.
 .mcp.json
+
+# Image Forge works out of this folder when it is pointed here.
+marketplace-images.csv
+generated-images/
