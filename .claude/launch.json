@@ -4,8 +4,12 @@
     {
       "name": "my-story",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
-      "port": 4747
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
+      "port": 4747,
+      "autoPort": false
     }
   ]
 }

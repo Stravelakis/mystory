@@ -1,5 +1,7 @@
 # My Story — a private, self-hosted journal for recording your own life
 
+![My Story](brand/banner.png)
+
 **Speak or write. It transcribes, keeps every word in a plain file on your own
 computer, and helps you put your life back in order.**
 

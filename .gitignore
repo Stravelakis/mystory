@@ -23,3 +23,6 @@ vault/
 # Image Forge works out of this folder when it is pointed here.
 marketplace-images.csv
 generated-images/
+
+# Chosen brand art is kept; the forge scratch folder above is not.
+!brand/
