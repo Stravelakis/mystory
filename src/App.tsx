@@ -695,6 +695,9 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   const [detectedIndicators, setDetectedIndicators] = useState<Indicator[]>([]);
   const [occurred, setOccurred] = useState<Occurred>({});
   const [datingBusy, setDatingBusy] = useState(false);
+  const [english, setEnglish] = useState('');
+  const [englishBy, setEnglishBy] = useState<'deepl' | 'model' | null>(null);
+  const [translating, setTranslating] = useState(false);
   const [providers] = useProviders();
   const [aiResponse, setAiResponse] = useState('');
   const [isArchiving, setIsArchiving] = useState(false);
@@ -845,6 +848,8 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
       setTranscript(e.text);
       setDetectedTags(e.indicators || []);
       setOccurred(e.occurred || {});
+      setEnglish(e.english || '');
+      setEnglishBy(null);
       setArchiveLink(e.drive || null);
       setArchiveError(null);
       setAiResponse('');
@@ -880,6 +885,28 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
       triggerAlert('Moved to the vault trash. The file is still on disk.', 'info');
     } catch (e: any) {
       triggerAlert('Could not move that entry: ' + (e.message || e), 'error');
+    }
+  };
+
+  /** Render the entry in English, beside the original rather than over it. */
+  const translateIt = async () => {
+    if (!transcript.trim()) return;
+    setTranslating(true);
+    try {
+      const res = await fetch('/api/journal/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: transcript, id: entryId ?? undefined }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Translation failed.');
+      setEnglish(data.text);
+      setEnglishBy(data.engine);
+      void refreshEntries();
+    } catch (e: any) {
+      triggerAlert('Could not translate: ' + (e.message || e), 'error');
+    } finally {
+      setTranslating(false);
     }
   };
 
@@ -1518,6 +1545,41 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
                   </div>
                 ))}
               </div>
+            )}
+          </Frame>
+
+          <Frame title="In English">
+            <p className="sec-note" style={{ marginBottom: 'var(--gap)' }}>
+              For entries written in Greek. The original is kept exactly as you
+              wrote it — this sits beside it, never over it.
+            </p>
+            <div className="flex items-center gap-3 flex-wrap">
+              <button className="btn btn-sm cut-sm" disabled={translating || !transcript.trim()} onClick={translateIt}>
+                <span className="flex items-center gap-2">
+                  {translating ? <RefreshCw className="w-3 h-3 animate-spin" /> : null}
+                  {translating ? 'Translating…' : english ? 'Translate again' : 'Translate'}
+                </span>
+              </button>
+              {englishBy === 'deepl' && <span className="tag good">DeepL</span>}
+              {englishBy === 'model' && <span className="tag">a language model</span>}
+            </div>
+
+            {englishBy === 'model' && (
+              <div className="callout warn" style={{ marginTop: 'var(--gap)' }}>
+                <span className="cd" />
+                <span>
+                  No DeepL key is set, so a language model did this. It will have
+                  tidied the grammar and smoothed the phrasing — fine for reading
+                  back, less so if the exact wording matters. A DeepL key renders
+                  rather than rewrites.
+                </span>
+              </div>
+            )}
+
+            {english && (
+              <p className="sec-note" style={{ marginTop: 'var(--gap)', whiteSpace: 'pre-wrap' }}>
+                {english}
+              </p>
             )}
           </Frame>
 

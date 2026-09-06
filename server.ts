@@ -80,6 +80,7 @@ import {
   type Task,
 } from './providers.ts';
 import { buildPrompt, normalise, loadTerms, CATEGORIES } from './vocabulary.ts';
+import { translate } from './translate.ts';
 
 dotenv.config();
 
@@ -448,6 +449,35 @@ async function startServer() {
     } catch (e) {
       console.error('Analyze Tags Error:', e);
       res.json({ success: true, tags: [], indicators: [] });
+    }
+  });
+
+  /** Greek in, English beside it.
+   *
+   *  The translation is stored under its own heading in the same file, never
+   *  in place of the original. DeepL is tried first when a key is set because
+   *  it renders a sentence; a language model rewrites one, and quietly tidies
+   *  fragments, softens anger and fixes grammar. For a diary that is a nicety.
+   *  For a record of what somebody said to you it is a loss you cannot see. */
+  app.post('/api/journal/translate', async (req, res) => {
+    const text = String(req.body?.text || '').trim();
+    const id = req.body?.id;
+    if (!text) return res.status(400).json({ success: false, error: 'Nothing to translate.' });
+
+    try {
+      const config = await loadConfig();
+      const result = await translate(config, text);
+
+      // Saved with the entry when there is one, so it survives a reload.
+      if (isValidId(id)) {
+        await saveEntry({ id, english: result.text }).catch(err =>
+          console.warn('Could not store the translation:', err?.message || err),
+        );
+      }
+
+      res.json({ success: true, ...result });
+    } catch (e: any) {
+      res.json({ success: false, error: e?.message || String(e) });
     }
   });
 
