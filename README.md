@@ -1,16 +1,50 @@
-# My Story
+# My Story — a private, self-hosted journal for recording your own life
 
-**A private vault for recording your own life, in your own words, on hardware you own.**
+**Speak or write. It transcribes, keeps every word in a plain file on your own
+computer, and helps you put your life back in order.**
 
-Speak or write into the Vault. The recording is transcribed, named, and kept as
-a plain markdown file on your disk. Patterns worth naming — what was done to
-you, the position you were put in, how you survived it, what protected you —
-are named beside the entry, with the words they were drawn from. When there is
-enough of an archive to work with, Synthesis reads the entries back and drafts
-them into chapters.
+A free, open-source, self-hosted journalling app for anyone who wants a record
+of their own life that nobody else can read — built for people whose memory of
+it is patchy, and who are tired of trusting an app company with the worst years
+of it.
 
-It runs on one machine that you own. There is no account, no server of ours,
-and nothing to sign up for. Nobody hosts this for you, including us.
+- **Nothing leaves your machine unless you say so.** There is a switch that
+  makes that a guarantee rather than a promise: with local-only routing, the
+  app will not contact a cloud provider even if a key is sitting in its
+  settings, and it switches off Google Drive too.
+- **Your entries are plain markdown files.** Readable in Notepad, backed up
+  with a folder copy, and still yours if this project disappears tomorrow.
+- **Runs on free AI, local AI, or your own keys.** Ollama or LocalAI on your
+  own hardware, a free Google or Groq tier, or anything that speaks the OpenAI
+  protocol. Six jobs, each with a first choice and two fallbacks.
+- **Speaks Greek and English**, and keeps the original beside the translation.
+- **Names what happened, and quotes you for it.** Gaslighting, DARVO,
+  scapegoat, golden child, flying monkeys, fawn, gray rock — grouped by whether
+  it was done to you, was a position you were put in, was how you survived, or
+  was what protected you. Every label carries the sentence it came from, and a
+  label it cannot quote for is dropped.
+- **Drafts chapters you can check.** Every claim cites the entry it came from.
+
+Read [GUIDE.md](GUIDE.md) if you have never installed anything before.
+[INSTALL.md](INSTALL.md) is the step-by-step.
+
+> **This is a journal, not a clinician.** It names behaviours and dynamics —
+> things that happened, and what they are commonly called. It does not diagnose
+> anyone, it never speaks unless you press the button that asks it to, and it
+> is not a substitute for care from a person. If you are in crisis, please
+> reach one.
+
+### Is this the thing you were looking for?
+
+| You want | This app |
+|---|---|
+| A diary nobody else can read | Yes. One machine, one passcode, plain files. |
+| To not hand your life to a company | Yes. That is the whole design. |
+| To remember things in order | Yes — entries carry when they *happened*, not just when you typed them. |
+| To write in Greek | Yes, with English beside it. |
+| A therapist, or a crisis line | **No.** Please find a person. |
+| Something you sign up for | **No.** There is nothing to sign up for, and nobody hosts it. |
+| To sync across devices in the cloud | **No**, beyond an optional mirror into your own Google Drive. |
 
 > **This is a journal, not a clinician.** It names behaviours and dynamics —
 > things that happened, and what they are commonly called. It does not
@@ -114,7 +148,7 @@ Indicators is usually the quickest fix.
 
 ### Which model does which job
 
-Five jobs, each with a first choice and two fallbacks. If the first cannot
+Six jobs, each with a first choice and two fallbacks. If the first cannot
 answer — out of quota, retired, switched off — the second is tried, then the
 third, and the app reports which one answered.
 
@@ -373,6 +407,7 @@ back, the chain works.
 | [INSTALL.md](INSTALL.md) | step by step, including what goes wrong |
 | [DEPLOY.md](DEPLOY.md) | an always-on box, and reaching it from a phone |
 | [HANDOFF.md](HANDOFF.md) | working on the code |
+| [CONNECT-AGENTS.md](CONNECT-AGENTS.md) | pointing Claude Code or a script at the running app |
 | [STANDARDS.md](STANDARDS.md) | contributing — what "done" means, and why |
 
 ## Licence

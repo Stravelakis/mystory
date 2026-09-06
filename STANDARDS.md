@@ -134,6 +134,68 @@ afternoon.
 
 Especially where the obvious approach was tried and failed.
 
+## 13. The README is the front door, and it is written for strangers
+
+Someone arrives from a search, a link, or a friend, and decides in about
+fifteen seconds whether this is the thing they were looking for. The README
+answers that first, before it explains anything.
+
+Every audience gets its own file rather than a section buried in one long
+page — [GUIDE](GUIDE.md) for someone who has never installed anything,
+[INSTALL](INSTALL.md) for the steps, [DEPLOY](DEPLOY.md) for a box that stays
+on, [HANDOFF](HANDOFF.md) for an engineer, this file for a contributor. A
+single README that tries to serve all five serves none.
+
+**Findable, in plain words.** The people who need this search for what
+happened to them, not for software: "private journal app", "self-hosted",
+"CPTSD", "keep my own data", "local AI". Those words belong in the opening
+paragraph and the description because they are *true*, not to game anything.
+A title tag, a one-line description, and honest headings are the whole SEO
+budget.
+
+> **Why:** the first README opened with the architecture. Somebody looking for
+> a private place to write would have closed the tab.
+
+## 14. Movement means something, or it does not happen
+
+Animation is feedback, not decoration. It exists to say: this saved, this is
+listening, this arrived, this is the same object you were just looking at.
+
+- Nothing animates on a timer or on its own.
+- Nothing animates for longer than it takes to notice — roughly 200ms.
+- `prefers-reduced-motion` removes all of it. Deco Noir already honours that;
+  anything added has to honour it too.
+- The recording indicator is the exception that proves the rule: it moves
+  continuously because it is reporting a live state, and stopping would be a
+  lie.
+
+> **Why:** this app is used by people whose nervous systems are already doing
+> too much. A page that shimmers at somebody mid-sentence is not neutral.
+
+## 15. Settings must be able to repair themselves
+
+Any setting a person can get wrong needs a way to see that it is wrong and a
+way to put it right, from inside the app.
+
+- Every provider key has a **Test** that says working or says why not.
+- Model lists are loaded from the provider, never typed from memory.
+- There is a place to see what is configured, what is reachable, and what
+  version is running.
+- A broken value is reported in plain words, never as a status code.
+- Nothing destructive is a single click away from something ordinary.
+
+> **Why:** a key that silently does not work costs an afternoon and reads like
+> the app being broken. Twice now that is exactly what happened.
+
+## 16. The look is a setting, not a build-time decision
+
+Deco Noir ships with colourways and a dress. Which one is in use belongs to
+the person using it, and survives a restart.
+
+Appearance is not cosmetic here. Someone writing about the worst years of
+their life at two in the morning should be able to turn the contrast down
+without editing a file.
+
 ---
 
 ## Before you open a pull request

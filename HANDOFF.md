@@ -74,9 +74,9 @@ happens to be on your network and whose `local` flag is true. This collapsed
 four hand-rolled fallback chains into one router; do not reintroduce a branch
 for "local".
 
-### Five jobs
+### Six jobs
 
-`transcribe`, `indicators`, `companion`, `title`, `synthesis`. Each takes a
+`transcribe`, `when`, `indicators`, `companion`, `title`, `synthesis`. Each takes a
 first choice and two fallbacks, stored as `MODEL_<TASK>_1/_2/_3` in `.env`,
 each `"<providerId>::<model>"`.
 
@@ -160,11 +160,6 @@ replaces the prompt with them.
 
 - **`server.ts` is LF, most of the repo was CRLF.** `.gitattributes` normalises
   now. Multi-line string anchors will silently miss on a CRLF checkout.
-- **Front matter stores indicator *labels* only.** Category, definition and
-  evidence are computed per request and are **not persisted**. The book work
-  needs them on disk — that is the next schema change.
-- **No `occurred:` field.** Entries sort by when they were typed, not when the
-  event happened. There is no real timeline until that exists.
 - **`src/App.tsx` is one 2000-line file.** Splitting it is fine; splitting it
   while also changing behaviour is not.
 - **Gemini `*-live-*` / `*-transcribe` are `bidiGenerateContent`** — WebSocket,

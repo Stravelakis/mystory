@@ -307,6 +307,12 @@ interface GoogleStatus {
 }
 
 export default function App() {
+  // Before anything renders, so the identity never flashes the wrong colour.
+  const [appearance, setAppearance] = useState(readAppearance);
+  useEffect(() => {
+    applyAppearance(appearance.way, appearance.dress);
+  }, [appearance]);
+
   // ?tab=synthesis deep-links a surface, which is handy on a headless box you
   // only ever reach by URL.
   const [activeTab, setActiveTab] = useState<Tab>(() => {
@@ -500,6 +506,8 @@ export default function App() {
               onLinkGoogle={handleLinkGoogle}
               onDisconnect={handleDisconnect}
               onGoogleChanged={readGoogle}
+              appearance={appearance}
+              onAppearance={setAppearance}
             />
           )}
         </AnimatePresence>
@@ -618,6 +626,58 @@ interface ProvidersState {
   tasks: TaskInfo[];
   assignments: Record<string, { providerId: string; model: string }[]>;
   synthesis: { label: string; local: boolean; options: { value: string; label: string }[] }[];
+}
+
+/* =============================================================================
+   APPEARANCE
+
+   Deco Noir already carries three colourways and three dresses; which one is
+   in use belongs to the person using the app, not to index.html.
+
+   Kept in localStorage rather than .env on purpose: this is a property of the
+   screen you are sitting at, not of the vault. The same vault reached from a
+   phone at night and a desktop in daylight should be allowed to look
+   different.
+   ========================================================================== */
+
+const WAYS = [
+  { id: 'oxblood', label: 'Oxblood', note: 'The default. Deep red under a low key light.' },
+  { id: 'jade', label: 'Jade', note: 'Cooler, greener, further from the colour of alarm.' },
+  { id: 'nickel', label: 'Nickel', note: 'Grey and quiet. The least present of the three.' },
+];
+
+const DRESSES = [
+  { id: 'full', label: 'Full', note: 'Every flourish the identity has.' },
+  { id: 'working', label: 'Working', note: 'Fewer ornaments, same bones. Easier on a long session.' },
+  { id: 'plain', label: 'Plain', note: 'Geometry only. The quietest it gets.' },
+];
+
+const APPEARANCE_KEY = 'mystory.appearance';
+
+function readAppearance(): { way: string; dress: string } {
+  try {
+    const raw = localStorage.getItem(APPEARANCE_KEY);
+    if (raw) {
+      const v = JSON.parse(raw);
+      return {
+        way: WAYS.some(w => w.id === v.way) ? v.way : 'oxblood',
+        dress: DRESSES.some(d => d.id === v.dress) ? v.dress : 'full',
+      };
+    }
+  } catch {
+    // A cleared or blocked store is not an error; the default look is fine.
+  }
+  return { way: 'oxblood', dress: 'full' };
+}
+
+function applyAppearance(way: string, dress: string) {
+  document.documentElement.setAttribute('data-way', way);
+  document.documentElement.setAttribute('data-dress', dress);
+  try {
+    localStorage.setItem(APPEARANCE_KEY, JSON.stringify({ way, dress }));
+  } catch {
+    // Losing the preference costs a re-pick, not a session.
+  }
 }
 
 const NO_PROVIDERS: ProvidersState = {
@@ -1912,6 +1972,8 @@ function SynthesisStudio({ google }: { key?: string; google: GoogleStatus }) {
    ========================================================================== */
 
 interface SettingsCenterProps {
+  appearance: { way: string; dress: string };
+  onAppearance: (v: { way: string; dress: string }) => void;
   key?: string;
   google: GoogleStatus;
   onLinkGoogle: () => any;
@@ -2042,7 +2104,14 @@ const ROUTING_NOTE: Record<string, string> = {
   'local-only': 'Nothing leaves this machine. Cloud providers are not asked, and Google Drive is switched off.',
 };
 
-function SettingsCenter({ google, onLinkGoogle, onDisconnect, onGoogleChanged }: SettingsCenterProps) {
+function SettingsCenter({
+  google,
+  onLinkGoogle,
+  onDisconnect,
+  onGoogleChanged,
+  appearance,
+  onAppearance,
+}: SettingsCenterProps) {
   const [config, setConfig] = useState<Record<string, string>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -2622,6 +2691,102 @@ function SettingsCenter({ google, onLinkGoogle, onDisconnect, onGoogleChanged }:
           )}
         </Frame>
       </div>
+
+      <Frame title="How it looks" className="mb-6">
+        <p className="sec-note">
+          Kept on this device, not in the vault. The same journal reached from a
+          phone at night and a desktop in daylight is allowed to look different.
+        </p>
+
+        <div className="grid g2">
+          <div>
+            <p className="k" style={{ marginBottom: 6 }}>Colourway</p>
+            <Picker
+              id="pick-way"
+              value={appearance.way}
+              onChange={v => onAppearance({ ...appearance, way: v })}
+              groups={[{ options: WAYS.map(w => ({ value: w.id, label: w.label })) }]}
+            />
+            <p className="fhint" style={{ marginTop: 6 }}>
+              {WAYS.find(w => w.id === appearance.way)?.note}
+            </p>
+          </div>
+
+          <div>
+            <p className="k" style={{ marginBottom: 6 }}>Ornament</p>
+            <Picker
+              id="pick-dress"
+              value={appearance.dress}
+              onChange={v => onAppearance({ ...appearance, dress: v })}
+              groups={[{ options: DRESSES.map(d => ({ value: d.id, label: d.label })) }]}
+            />
+            <p className="fhint" style={{ marginTop: 6 }}>
+              {DRESSES.find(d => d.id === appearance.dress)?.note}
+            </p>
+          </div>
+        </div>
+
+        <p className="fhint">
+          If your system asks for reduced motion, this app already obeys it — nothing
+          here animates regardless of the setting above.
+        </p>
+      </Frame>
+
+      <Frame title="Check and repair" className="mb-6">
+        <p className="sec-note">
+          What is actually configured, and whether it answers. A setting you can get
+          wrong needs somewhere to see that it is wrong.
+        </p>
+
+        <div className="grid g3">
+          <div className="tile">
+            <p className="k">Where models run</p>
+            <p className="v" style={{ fontSize: 'var(--step-0)' }}>{providers.routing}</p>
+          </div>
+          <div className="tile">
+            <p className="k">Providers reachable</p>
+            <p className="v">
+              {providers.providers.filter(p => !p.blocked && !p.error).length}/
+              {providers.providers.filter(p => !p.blocked).length}
+            </p>
+          </div>
+          <div className="tile">
+            <p className="k">Jobs with a model</p>
+            <p className="v">
+              {Object.values(providers.assignments).filter(v => v.length > 0).length}/{providers.tasks.length}
+            </p>
+          </div>
+        </div>
+
+        {providers.tasks.filter(t => (providers.assignments[t.id] || []).length === 0).length > 0 && (
+          <div className="callout warn" style={{ marginTop: 'var(--gap)' }}>
+            <span className="cd" />
+            <span>
+              No model is assigned for:{' '}
+              <b>
+                {providers.tasks
+                  .filter(t => (providers.assignments[t.id] || []).length === 0)
+                  .map(t => t.label)
+                  .join(', ')}
+              </b>
+              . Those jobs will pick for themselves from whatever is configured, which
+              works but is not what you chose.
+            </span>
+          </div>
+        )}
+
+        <div className="flex items-center gap-3 flex-wrap" style={{ marginTop: 'var(--gap)' }}>
+          <button className="btn btn-sm cut-sm" disabled={loadingModels} onClick={() => void reloadProviders(true)}>
+            <span className="flex items-center gap-2">
+              {loadingModels ? <RefreshCw className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              {loadingModels ? 'Checking…' : 'Re-check everything'}
+            </span>
+          </button>
+          <span className="fhint" style={{ margin: 0 }}>
+            Asks every provider what it can reach. Costs nothing.
+          </span>
+        </div>
+      </Frame>
 
       <div
         style={{
