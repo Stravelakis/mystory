@@ -81,6 +81,8 @@ import {
 } from './providers.ts';
 import { buildPrompt, normalise, loadTerms, CATEGORIES } from './vocabulary.ts';
 import { translate } from './translate.ts';
+import { draftEpisode, proposeEpisodes } from './episodes.ts';
+import { timelineKey } from './vault.ts';
 
 dotenv.config();
 
@@ -449,6 +451,77 @@ async function startServer() {
     } catch (e) {
       console.error('Analyze Tags Error:', e);
       res.json({ success: true, tags: [], indicators: [] });
+    }
+  });
+
+  /* ---- episodes ----------------------------------------------------------
+     A chapter over a slice of the timeline, with every claim traceable back to
+     the entry it came from. */
+
+  /** Candidate episodes, grouped by a gap in time. A starting point the writer
+   *  adjusts, never a claim about what belongs together. */
+  app.get('/api/episodes/propose', async (req, res) => {
+    try {
+      const gapDays = Math.max(1, Math.min(3650, Number(req.query.gapDays) || 120));
+      const entries = (await listEntries()).map(e => ({ ...e, key: timelineKey(e) }));
+      const { placed, undated } = proposeEpisodes(entries, gapDays);
+
+      res.json({
+        success: true,
+        gapDays,
+        episodes: placed.map(group => ({
+          from: group[0].occurred?.start || '',
+          to: group[group.length - 1].occurred?.end || group[group.length - 1].occurred?.start || '',
+          ids: group.map(e => e.id),
+          titles: group.map(e => e.title),
+        })),
+        undated: undated.map(e => ({ id: e.id, title: e.title })),
+      });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  /** Draft one episode from a chosen set of entries. */
+  app.post('/api/episodes/draft', async (req, res) => {
+    const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.filter(isValidId) : [];
+    if (ids.length === 0) {
+      return res.status(400).json({ success: false, error: 'Choose at least one entry.' });
+    }
+
+    try {
+      const config = await loadConfig();
+
+      const loaded = [];
+      for (const id of ids) {
+        try {
+          loaded.push(await readEntry(id));
+        } catch {
+          console.warn(`Episode skipped unreadable entry ${id}`);
+        }
+      }
+      if (loaded.length === 0) {
+        return res.status(400).json({ success: false, error: 'None of those entries could be read.' });
+      }
+
+      // Chapters read in the order things happened, not the order they were
+      // written or the order they were clicked.
+      loaded.sort((a, b) => timelineKey(a) - timelineKey(b));
+
+      const raw = String(req.body?.model || '');
+      const [pickedProvider, pickedModel] = raw.includes('::') ? raw.split('::') : ['', raw];
+
+      const draft = await draftEpisode(config, loaded, {
+        focus: typeof req.body?.focus === 'string' ? req.body.focus.slice(0, 400) : undefined,
+        explainTerms: req.body?.explainTerms !== false,
+        ...(pickedModel ? { model: pickedModel } : {}),
+        ...(pickedProvider ? { providerId: pickedProvider } : {}),
+      });
+
+      res.json({ success: true, ...draft });
+    } catch (e: any) {
+      console.error('Episode draft failed:', e);
+      res.status(500).json({ success: false, error: e.message || String(e) });
     }
   });
 
