@@ -337,17 +337,50 @@ async function startServer() {
     }
   });
 
+  // found / occurred / english ride along with a save; saveEntry keeps any
+  // field the caller does not mention.
   app.post('/api/vault/entries', async (req, res) => {
     try {
-      const { id, title, text, indicators, drive } = req.body || {};
-      if (typeof text !== 'string' && typeof drive !== 'string') {
+      const { id, title, text, indicators, found, occurred, english, drive } = req.body || {};
+      if (typeof text !== 'string' && typeof drive !== 'string' && !occurred) {
         return res.status(400).json({ success: false, error: 'Nothing to save.' });
       }
+
+      // Only the two fields that are actually stored per indicator. Everything
+      // else about a term — its label, category and definition — is looked up
+      // from the vocabulary when the entry is read, so a definition edited
+      // later applies to every entry instead of leaving stale copies on disk.
+      const cleanFound = Array.isArray(found)
+        ? found
+            .filter((r: any) => r && typeof r.id === 'string')
+            .map((r: any) => ({
+              id: String(r.id),
+              ...(typeof r.evidence === 'string' && r.evidence ? { evidence: String(r.evidence).slice(0, 400) } : {}),
+            }))
+        : undefined;
+
+      // A partial "when" is normal and expected: the writer may give words with
+      // no range, or a model a range with no words.
+      const iso = (v: any) => (typeof v === 'string' && /^\d{4}(-\d{2}){0,2}$/.test(v.trim()) ? v.trim() : undefined);
+      const cleanOccurred = occurred
+        ? {
+            ...(typeof occurred.text === 'string' ? { text: occurred.text.slice(0, 300) } : {}),
+            ...(iso(occurred.start) ? { start: iso(occurred.start) } : {}),
+            ...(iso(occurred.end) ? { end: iso(occurred.end) } : {}),
+            ...(['stated', 'anchored', 'inferred', 'unknown'].includes(occurred.confidence)
+              ? { confidence: occurred.confidence }
+              : {}),
+          }
+        : undefined;
+
       const entry = await saveEntry({
         id: isValidId(id) ? id : undefined,
         title,
         text,
         indicators: Array.isArray(indicators) ? indicators.map(String) : undefined,
+        found: cleanFound,
+        occurred: cleanOccurred,
+        english: typeof english === 'string' ? english : undefined,
         drive,
       });
       res.json({ success: true, entry });
@@ -415,6 +448,85 @@ async function startServer() {
     } catch (e) {
       console.error('Analyze Tags Error:', e);
       res.json({ success: true, tags: [], indicators: [] });
+    }
+  });
+
+  /** Roughly when did this happen?
+   *
+   *  The hard part of a life story is not remembering an event, it is placing
+   *  it. Someone who says "around when we moved" is being accurate, and asking
+   *  them for a date would make them invent one. So the writer's own words are
+   *  kept verbatim and a model is asked only for a RANGE wide enough to be
+   *  honest, which is all that ordering actually needs.
+   *
+   *  Entries the writer has already dated are passed in as anchors, because
+   *  "the year after we moved" is answerable once "we moved" has a range. */
+  app.post('/api/journal/when', async (req, res) => {
+    const text = String(req.body?.text || '').trim();
+    if (text.length < 15) return res.json({ success: true, occurred: {} });
+
+    try {
+      const config = await loadConfig();
+
+      const anchors = (await listEntries())
+        .filter(e => e.occurred?.start && e.occurred?.text)
+        .slice(0, 40)
+        .map(e => `- "${e.occurred.text}" = ${e.occurred.start}${e.occurred.end ? ` to ${e.occurred.end}` : ''}`)
+        .join('\n');
+
+      const today = new Date().toISOString().slice(0, 10);
+      const prompt = `Read this journal entry and work out roughly WHEN the events in it happened. Today is ${today}.
+
+Return ONLY JSON, no code fence, no commentary:
+{"text":"<the writer's own words about when, copied exactly, or \"\" if they gave none>",
+ "start":"<earliest it could have been, YYYY or YYYY-MM or YYYY-MM-DD>",
+ "end":"<latest it could have been, same format>",
+ "confidence":"stated|anchored|inferred|unknown"}
+
+Rules:
+- "text" must be an EXACT quote from the entry, or empty. Never paraphrase it, never invent one.
+- A wide range is a good answer. A whole year, or several, is fine and honest.
+- "stated" only if the entry names a date or year outright.
+- "anchored" if you placed it using one of the known points below.
+- "inferred" if you worked it out from context — someone's age, a school year, a season.
+- "unknown" if there is genuinely nothing to go on: return empty strings for start and end.
+- Do NOT guess to be helpful. An unknown answer is more useful than a wrong one.
+${anchors ? `\nPoints this writer has already dated:\n${anchors}\n` : ''}
+Entry:
+"""
+${text}
+"""`;
+
+      const result = await chat(config, { task: 'when', prompt, temperature: 0.1, json: true });
+
+      let raw = result.text.trim();
+      const fence = raw.match(/\u0060\u0060\u0060(?:json)?\s*([\s\S]*?)\u0060\u0060\u0060/);
+      if (fence) raw = fence[1].trim();
+      const span = raw.match(/\{[\s\S]*\}/);
+      if (span) raw = span[0];
+
+      const parsed = JSON.parse(raw);
+      const iso = (v: any) => (typeof v === 'string' && /^\d{4}(-\d{2}){0,2}$/.test(v.trim()) ? v.trim() : undefined);
+
+      // The quote has to be real, exactly as for indicator evidence.
+      const hay = text.toLowerCase().replace(/\s+/g, ' ');
+      const said = String(parsed.text || '').trim();
+      const quoted = said && hay.includes(said.toLowerCase().replace(/\s+/g, ' ')) ? said : undefined;
+
+      const occurred = {
+        text: quoted,
+        start: iso(parsed.start),
+        end: iso(parsed.end),
+        confidence: ['stated', 'anchored', 'inferred', 'unknown'].includes(parsed.confidence)
+          ? parsed.confidence
+          : 'inferred',
+      };
+
+      res.json({ success: true, occurred, provider: result.provider, model: result.model });
+    } catch (e: any) {
+      console.warn('When-analysis failed:', e?.message || e);
+      // An entry saves whether or not anything could be said about when it was.
+      res.json({ success: true, occurred: {}, error: e?.message || String(e) });
     }
   });
 

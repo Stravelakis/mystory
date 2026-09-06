@@ -516,12 +516,39 @@ const DRAFT_KEY = 'mystory.draft';
 /** Below this, a stray keystroke is not worth a file of its own. */
 const DRAFT_MIN_CHARS = 40;
 
+interface Occurred {
+  text?: string;
+  start?: string;
+  end?: string;
+  confidence?: 'stated' | 'anchored' | 'inferred' | 'unknown';
+}
+
+/** How sure the app is about when something happened, said in words rather
+ *  than jargon. The writer's own phrasing always outranks any of it. */
+const CONFIDENCE_NOTE: Record<string, string> = {
+  stated: 'You said when.',
+  anchored: 'Placed next to something else you dated.',
+  inferred: 'Worked out from what you wrote. Correct it if it is wrong.',
+  unknown: 'Not placed yet. It will sort by when you wrote it until then.',
+};
+
+/** "2011" and "2011-06" are both legitimate answers, so a range is shown as
+ *  written rather than turned into a false-precision date. */
+const showRange = (o?: Occurred) => {
+  if (!o?.start && !o?.end) return '';
+  if (o.start && o.end && o.start === o.end) return o.start;
+  return [o.start, o.end].filter(Boolean).join(' → ');
+};
+
 interface VaultEntry {
   id: string;
   title: string;
   created: string;
   updated: string;
   indicators: string[];
+  found?: { id: string; evidence?: string }[];
+  occurred?: Occurred;
+  english?: string;
   audio?: string;
   drive?: string;
   text: string;
@@ -666,6 +693,8 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   const [engine, setEngine] = useState('auto');
   const [detectedTags, setDetectedTags] = useState<string[]>([]);
   const [detectedIndicators, setDetectedIndicators] = useState<Indicator[]>([]);
+  const [occurred, setOccurred] = useState<Occurred>({});
+  const [datingBusy, setDatingBusy] = useState(false);
   const [providers] = useProviders();
   const [aiResponse, setAiResponse] = useState('');
   const [isArchiving, setIsArchiving] = useState(false);
@@ -719,7 +748,8 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
     }
   };
 
-  const signature = () => JSON.stringify([entryId, sessionName, transcript, detectedTags]);
+  const signature = () =>
+    JSON.stringify([entryId, sessionName, transcript, detectedTags, occurred]);
 
   /** Writes the entry to disk on this machine. Everything else — Drive, models
    *  — is downstream of this having already happened. */
@@ -735,6 +765,11 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
           title: sessionName || undefined,
           text: transcript,
           indicators: detectedTags,
+          // The quotes go to disk with the entry. Recomputing them later would
+          // ask a different model a different question and get a different
+          // answer, which is not what a record is for.
+          found: detectedIndicators.map(i => ({ id: i.id, evidence: i.evidence })),
+          occurred,
           ...extra,
         }),
       });
@@ -809,6 +844,7 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
       setSessionName(e.title === 'Untitled' || e.title === 'Untitled recording' ? '' : e.title);
       setTranscript(e.text);
       setDetectedTags(e.indicators || []);
+      setOccurred(e.occurred || {});
       setArchiveLink(e.drive || null);
       setArchiveError(null);
       setAiResponse('');
@@ -844,6 +880,32 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
       triggerAlert('Moved to the vault trash. The file is still on disk.', 'info');
     } catch (e: any) {
       triggerAlert('Could not move that entry: ' + (e.message || e), 'error');
+    }
+  };
+
+  /** Ask what the entry says about when it happened. Never automatic: it
+   *  costs a model call, and being asked "when was this?" unprompted while you
+   *  are still writing is the opposite of what this app is for. */
+  const dateIt = async () => {
+    if (!transcript.trim()) return;
+    setDatingBusy(true);
+    try {
+      const res = await fetch('/api/journal/when', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: transcript }),
+      });
+      const data = await res.json();
+      const got = data.occurred || {};
+      if (!got.text && !got.start && !got.end) {
+        triggerAlert('Nothing in the entry says when this happened. You can type it yourself.', 'info');
+      }
+      // Merged, so a model finding a range cannot wipe words you typed.
+      setOccurred(prev => ({ ...prev, ...got }));
+    } catch (e: any) {
+      triggerAlert('Could not work out when: ' + (e.message || e), 'error');
+    } finally {
+      setDatingBusy(false);
     }
   };
 
@@ -1456,6 +1518,50 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
                   </div>
                 ))}
               </div>
+            )}
+          </Frame>
+
+          <Frame title="When did this happen?">
+            <p className="sec-note" style={{ marginBottom: 'var(--gap)' }}>
+              Not when you wrote it — when it happened. Your own words are enough;
+              a rough range is all the ordering needs.
+            </p>
+
+            <Field
+              label="In your words"
+              value={occurred.text || ''}
+              onChange={v => setOccurred(prev => ({ ...prev, text: v }))}
+              placeholder="around when we moved"
+              hint="Kept exactly as you type it. Never rewritten."
+            />
+
+            <div className="grid g2">
+              <Field
+                label="From"
+                value={occurred.start || ''}
+                onChange={v => setOccurred(prev => ({ ...prev, start: v }))}
+                placeholder="2011"
+              />
+              <Field
+                label="Until"
+                value={occurred.end || ''}
+                onChange={v => setOccurred(prev => ({ ...prev, end: v }))}
+                placeholder="2012"
+              />
+            </div>
+
+            <div className="flex items-center gap-3 flex-wrap">
+              <button className="btn btn-sm cut-sm" disabled={datingBusy || !transcript.trim()} onClick={dateIt}>
+                <span className="flex items-center gap-2">
+                  {datingBusy ? <RefreshCw className="w-3 h-3 animate-spin" /> : null}
+                  {datingBusy ? 'Reading…' : 'Work it out for me'}
+                </span>
+              </button>
+              {showRange(occurred) && <span className="tag">{showRange(occurred)}</span>}
+            </div>
+
+            {occurred.confidence && (
+              <p className="fhint" style={{ marginTop: 8 }}>{CONFIDENCE_NOTE[occurred.confidence]}</p>
             )}
           </Frame>
 

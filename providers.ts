@@ -29,7 +29,7 @@ export type Routing = 'cloud-first' | 'local-first' | 'local-only';
 
 /** Every job a model is asked to do. Each one can be assigned a first choice
  *  and two fallbacks, per task, in Settings. */
-export type Task = 'indicators' | 'companion' | 'title' | 'synthesis' | 'transcribe';
+export type Task = 'indicators' | 'companion' | 'title' | 'synthesis' | 'transcribe' | 'when';
 
 export const TASKS: { id: Task; label: string; blurb: string }[] = [
   {
@@ -46,6 +46,12 @@ export const TASKS: { id: Task; label: string; blurb: string }[] = [
     id: 'companion',
     label: 'Companion',
     blurb: 'The grounded response or gentle prompt, when you ask for one. Never runs unasked.',
+  },
+  {
+    id: 'when',
+    label: 'When it happened',
+    blurb:
+      'Reads an entry and proposes roughly when it happened, so entries can be put in order. It never overwrites your own words about it.',
   },
   { id: 'title', label: 'Titles', blurb: 'Names an entry in a few words. The smallest job here.' },
   {
@@ -105,6 +111,7 @@ export interface ChatRequest {
  *  one — ornith-1.0-9b used 1,494 tokens on one run of the same entry and
  *  more than 3,000 on the next. */
 const MAX_TOKENS: Record<Task, number> = {
+  when: 3000,
   indicators: 8000,
   companion: 1500,
   title: 1000,

@@ -48,14 +48,52 @@ export function extForMime(mime = ''): string {
   return AUDIO_EXT[base] || 'webm';
 }
 
+/** One named pattern, as stored. Only the term id and the words it was drawn
+ *  from are kept: the label, category and definition all come from the
+ *  vocabulary at read time, so editing a definition updates every entry rather
+ *  than leaving thousands of stale copies on disk. */
+export interface StoredIndicator {
+  id: string;
+  evidence?: string;
+}
+
+/** When the thing actually happened, as opposed to when it was written down.
+ *
+ *  `text` is the only field the writer is asked for, and it is kept verbatim:
+ *  "around when we moved", "the summer before school". That is usually the
+ *  truest thing available, and it is what gets displayed.
+ *
+ *  `start`/`end` are a RANGE a model inferred so that entries can be put in
+ *  order. A whole year is a legitimate answer. They are never shown as if they
+ *  were facts, and never overwrite `text`.
+ *
+ *  Dates are ISO and may be partial: "2009", "2009-06", "2009-06-14". */
+export interface Occurred {
+  text?: string;
+  start?: string;
+  end?: string;
+  /** stated  - the writer gave a date
+   *  anchored - placed relative to another entry the writer did date
+   *  inferred - a model's guess from context
+   *  unknown  - nothing to go on yet */
+  confidence?: 'stated' | 'anchored' | 'inferred' | 'unknown';
+}
+
 export interface Entry {
   id: string;
   title: string;
   created: string;
   updated: string;
+  /** Labels, kept for a human reading the file and for anything that already
+   *  parsed this field. The evidence lives in `found`. */
   indicators: string[];
+  found: StoredIndicator[];
+  occurred: Occurred;
   audio?: string;
   drive?: string;
+  /** The entry rendered in English, when the original is not. The original is
+   *  never replaced — testimony is the words that were actually used. */
+  english?: string;
   text: string;
 }
 
@@ -85,19 +123,40 @@ export async function ensureVault(): Promise<void> {
 const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
 
 function serialize(e: Entry): string {
+  const o = e.occurred || {};
   const head = [
     '---',
     `id: ${e.id}`,
     `title: ${oneLine(e.title)}`,
     `created: ${e.created}`,
     `updated: ${e.updated}`,
+    // When it happened. Written as separate lines rather than one blob so that
+    // a person editing this file by hand can fix a range without touching JSON.
+    o.text ? `when: ${oneLine(o.text)}` : '',
+    o.start ? `when_start: ${o.start}` : '',
+    o.end ? `when_end: ${o.end}` : '',
+    o.confidence ? `when_confidence: ${o.confidence}` : '',
     `indicators: ${e.indicators.join(', ')}`,
+    // The quotes, as one JSON line. Ugly beside the rest, and still the right
+    // call: an evidence quote can contain commas, colons and newlines, which a
+    // naive key: value line cannot survive.
+    e.found?.length ? `found: ${JSON.stringify(e.found)}` : '',
     e.audio ? `audio: ${e.audio}` : '',
     e.drive ? `drive: ${e.drive}` : '',
     '---',
   ].filter(Boolean);
-  return head.join('\n') + '\n\n' + e.text.replace(/\s+$/, '') + '\n';
+
+  const body = e.english
+    ? `${e.text.replace(/\s+$/, '')}\n\n---\n\n## In English\n\n${e.english.replace(/\s+$/, '')}`
+    : e.text.replace(/\s+$/, '');
+
+  return head.join('\n') + '\n\n' + body + '\n';
 }
+
+/** The English rendering is appended under a heading rather than kept in front
+ *  matter, so the file still reads as a document. Splitting it back off has to
+ *  be exact, or a translation would slowly eat the original. */
+const ENGLISH_MARK = '\n\n---\n\n## In English\n\n';
 
 function parse(id: string, raw: string): Entry {
   const m = raw.match(/^---\n([\s\S]*?)\n---\n?/);
@@ -110,16 +169,75 @@ function parse(id: string, raw: string): Entry {
       if (i > 0) meta[line.slice(0, i).trim()] = line.slice(i + 1).trim();
     }
   }
+  let found: StoredIndicator[] = [];
+  if (meta.found) {
+    try {
+      const parsed = JSON.parse(meta.found);
+      if (Array.isArray(parsed)) {
+        found = parsed.filter(r => r && typeof r.id === 'string');
+      }
+    } catch {
+      // A hand-edited file that no longer parses should cost the quotes, not
+      // the entry.
+    }
+  }
+
+  let text = body.replace(/^\n+/, '');
+  let english: string | undefined;
+  const cut = text.indexOf(ENGLISH_MARK);
+  if (cut >= 0) {
+    english = text.slice(cut + ENGLISH_MARK.length).replace(/\s+$/, '');
+    text = text.slice(0, cut);
+  }
+
+  const confidence = ['stated', 'anchored', 'inferred', 'unknown'].includes(meta.when_confidence)
+    ? (meta.when_confidence as Occurred['confidence'])
+    : undefined;
+
   return {
     id: meta.id || id,
     title: meta.title || 'Untitled',
     created: meta.created || '',
     updated: meta.updated || meta.created || '',
     indicators: meta.indicators ? meta.indicators.split(',').map(s => s.trim()).filter(Boolean) : [],
+    found,
+    occurred: {
+      text: meta.when || undefined,
+      start: meta.when_start || undefined,
+      end: meta.when_end || undefined,
+      confidence,
+    },
     audio: meta.audio || undefined,
     drive: meta.drive || undefined,
-    text: body.replace(/^\n+/, ''),
+    english,
+    text,
   };
+}
+
+/** Where an entry sits on the timeline. A range collapses to its midpoint, a
+ *  partial date to its own midpoint ("2009" is the middle of 2009), and an
+ *  entry with no "when" at all falls back to when it was written — which is
+ *  wrong, but is the only thing there is, and the interface says so. */
+export function timelineKey(e: { occurred?: Occurred; created: string }): number {
+  const at = (d?: string, end = false): number | null => {
+    if (!d) return null;
+    const m = d.match(/^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?$/);
+    if (!m) {
+      const t = Date.parse(d);
+      return Number.isNaN(t) ? null : t;
+    }
+    const [, y, mo, da] = m;
+    if (da) return Date.UTC(+y, +mo - 1, +da);
+    if (mo) return end ? Date.UTC(+y, +mo, 0) : Date.UTC(+y, +mo - 1, 1);
+    return end ? Date.UTC(+y, 11, 31) : Date.UTC(+y, 0, 1);
+  };
+
+  const s = at(e.occurred?.start);
+  const t = at(e.occurred?.end, true);
+  if (s !== null && t !== null) return (s + t) / 2;
+  if (s !== null) return s;
+  if (t !== null) return t;
+  return Date.parse(e.created) || 0;
 }
 
 export async function readEntry(id: string): Promise<Entry> {
@@ -133,6 +251,9 @@ export interface SaveInput {
   title?: string;
   text?: string;
   indicators?: string[];
+  found?: StoredIndicator[];
+  occurred?: Occurred;
+  english?: string;
   audio?: string;
   drive?: string;
 }
@@ -154,6 +275,12 @@ export async function saveEntry(input: SaveInput): Promise<Entry> {
     created: existing?.created || now,
     updated: now,
     indicators: input.indicators ?? existing?.indicators ?? [],
+    found: input.found ?? existing?.found ?? [],
+    // Merged rather than replaced: a model filling in a range must not wipe the
+    // words the writer typed, and the writer correcting the words must not wipe
+    // the range.
+    occurred: { ...(existing?.occurred || {}), ...(input.occurred || {}) },
+    english: input.english ?? existing?.english,
     audio: input.audio ?? existing?.audio,
     drive: input.drive ?? existing?.drive,
     text: input.text ?? existing?.text ?? '',
@@ -191,7 +318,9 @@ export async function listEntries(): Promise<EntrySummary[]> {
     }
   }
 
-  return entries.sort((a, b) => (a.created < b.created ? 1 : -1));
+  // Newest first, but by when it HAPPENED. An entry nobody has dated yet
+  // falls back to when it was written, which is the only thing available.
+  return entries.sort((a, b) => timelineKey(b) - timelineKey(a));
 }
 
 /** Moves the entry and its audio into .trash. Nothing here unlinks anything —
