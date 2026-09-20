@@ -2196,6 +2196,35 @@ function SettingsCenter({
       options: p.models.map(m => ({ value: `${p.id}::${m}`, label: m })),
     }));
 
+  // Repair and Update: STANDARDS §6. Both may replace what the installer put
+  // on disk; neither goes near the vault, which lives elsewhere by design.
+  const [repairReport, setRepairReport] = useState<any>(null);
+  const [repairBusy, setRepairBusy] = useState(false);
+  const [updateReport, setUpdateReport] = useState<any>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+
+  const runRepair = async () => {
+    setRepairBusy(true);
+    try {
+      setRepairReport(await (await fetch('/api/maintenance/repair')).json());
+    } catch (e: any) {
+      setRepairReport({ success: false, error: e?.message || 'Could not reach the app.' });
+    } finally {
+      setRepairBusy(false);
+    }
+  };
+
+  const runUpdate = async () => {
+    setUpdateBusy(true);
+    try {
+      setUpdateReport(await (await fetch('/api/maintenance/update')).json());
+    } catch (e: any) {
+      setUpdateReport({ success: false, error: e?.message || 'Could not reach the app.' });
+    } finally {
+      setUpdateBusy(false);
+    }
+  };
+
   const [testing, setTesting] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<Record<string, string>>({});
 
@@ -2747,6 +2776,104 @@ function SettingsCenter({
           )}
         </Frame>
       </div>
+
+      <Frame title="Advanced" className="mb-6">
+        <p className="sec-note">
+          Checking and mending the app itself. Neither of these touches your
+          writing: the vault and your settings live in a separate folder, so
+          repairing or updating the program cannot reach them.
+        </p>
+
+        <div className="grid g2">
+          <div>
+            <p className="k" style={{ marginBottom: 6 }}>Repair</p>
+            <p className="fhint" style={{ marginBottom: 8 }}>
+              Checks that the app's own files are all present and not empty.
+            </p>
+            <button className="btn btn-sm cut-sm" disabled={repairBusy} onClick={() => void runRepair()}>
+              <span className="flex items-center gap-2">
+                {repairBusy ? <RefreshCw className="w-3 h-3 animate-spin" /> : null}
+                {repairBusy ? 'Checking…' : 'Check my files'}
+              </span>
+            </button>
+
+            {repairReport && (
+              <div style={{ marginTop: 'var(--gap)' }}>
+                {repairReport.healthy ? (
+                  <span className="tag good">
+                    <i />
+                    Everything is where it should be
+                  </span>
+                ) : (
+                  <>
+                    <span className="tag bad">
+                      <i />
+                      {repairReport.missing?.length} missing
+                    </span>
+                    <p className="fhint" style={{ marginTop: 8 }}>{repairReport.advice || repairReport.error}</p>
+                    {repairReport.missing?.length > 0 && (
+                      <ul className="fhint" style={{ marginTop: 6 }}>
+                        {repairReport.missing.map((m: string) => (
+                          <li key={m}>
+                            <code>{m}</code>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <p className="k" style={{ marginBottom: 6 }}>Update</p>
+            <p className="fhint" style={{ marginBottom: 8 }}>
+              Asks GitHub whether a newer version has been released.
+            </p>
+            <button className="btn btn-sm cut-sm" disabled={updateBusy} onClick={() => void runUpdate()}>
+              <span className="flex items-center gap-2">
+                {updateBusy ? <RefreshCw className="w-3 h-3 animate-spin" /> : null}
+                {updateBusy ? 'Asking…' : 'Check for an update'}
+              </span>
+            </button>
+
+            {updateReport && (
+              <div style={{ marginTop: 'var(--gap)' }}>
+                {updateReport.error ? (
+                  <p className="fhint">{updateReport.error}</p>
+                ) : updateReport.behind ? (
+                  <>
+                    <span className="tag">
+                      {updateReport.current} → {updateReport.latest}
+                    </span>
+                    <p className="fhint" style={{ marginTop: 8 }}>
+                      A newer version is available. Installing it replaces the program
+                      and leaves your writing alone.
+                    </p>
+                    <a
+                      className="btn btn-sm cut-sm no-underline"
+                      href={updateReport.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ marginTop: 8, display: 'inline-block' }}
+                    >
+                      <span className="flex items-center gap-2">
+                        Open the release <ExternalLink className="w-3 h-3" />
+                      </span>
+                    </a>
+                  </>
+                ) : (
+                  <span className="tag good">
+                    <i />
+                    Up to date ({updateReport.current})
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </Frame>
 
       <Frame title="How it looks" className="mb-6">
         <p className="sec-note">

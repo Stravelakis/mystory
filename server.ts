@@ -83,6 +83,7 @@ import {
 import { buildPrompt, normalise, loadTerms, CATEGORIES } from './vocabulary.ts';
 import { translate } from './translate.ts';
 import { draftEpisode, proposeEpisodes } from './episodes.ts';
+import { repair, checkUpdate } from './maintenance.ts';
 import { timelineKey } from './vault.ts';
 
 dotenv.config();
@@ -479,6 +480,28 @@ async function startServer() {
     } catch (e) {
       console.error('Analyze Tags Error:', e);
       res.json({ success: true, tags: [], indicators: [] });
+    }
+  });
+
+  /* ---- repair and update -------------------------------------------------
+     STANDARDS §6: an installed app can check and mend itself from inside
+     itself. Both of these may replace what the installer shipped and neither
+     goes near the vault. */
+
+  app.get('/api/maintenance/repair', async (_req, res) => {
+    try {
+      res.json({ success: true, ...(await repair()) });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  app.get('/api/maintenance/update', async (_req, res) => {
+    try {
+      const pkg = JSON.parse(await fs.readFile(path.join(process.cwd(), 'package.json'), 'utf-8'));
+      res.json({ success: true, ...(await checkUpdate(String(pkg.version || '0.0.0'))) });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message });
     }
   });
 

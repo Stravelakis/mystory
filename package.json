@@ -13,7 +13,10 @@
     "icons": "node scripts/gen-icons.cjs public",
     "gemini:doctor": "node scripts/gemini-doctor.mjs",
     "shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-shortcut.ps1",
-    "prepare": "git config core.hooksPath githooks || true"
+    "prepare": "git config core.hooksPath githooks || true",
+    "desktop": "npm run build && electron .",
+    "desktop:browser": "npm run build && electron . --browser",
+    "build-exe": "npm run build && electron-builder --win"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -40,7 +43,9 @@
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.3"
+    "vite": "^6.2.3",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
   },
   "description": "A private, self-hosted journal for recording your own life. Speech to text, plain markdown files on your own machine, local or cloud AI, Greek and English.",
   "license": "Apache-2.0",
@@ -67,5 +72,50 @@
     "markdown",
     "offline"
   ],
-  "author": "stravelakis"
+  "author": "stravelakis",
+  "main": "electron/main.js",
+  "build": {
+    "appId": "net.stravelakis.mystory",
+    "productName": "My Story",
+    "files": [
+      "dist/**",
+      "electron/**",
+      "public/**",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "public/mystory.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "My Story",
+      "uninstallDisplayName": "My Story",
+      "deleteAppDataOnUninstall": false
+    },
+    "portable": {
+      "artifactName": "my-story-portable-${version}.exe"
+    }
+  }
 }

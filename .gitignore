@@ -26,3 +26,5 @@ generated-images/
 
 # Chosen brand art is kept; the forge scratch folder above is not.
 !brand/
+
+release/

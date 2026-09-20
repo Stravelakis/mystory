@@ -12,7 +12,11 @@
 import fs from 'fs/promises';
 import path from 'path';
 
-export const ENV_PATH = path.join(process.cwd(), '.env');
+// The desktop build keeps settings in the user's own data folder rather than
+// beside the program, so an installer can replace every file it shipped
+// without going near a key or a passcode. MYSTORY_ENV_PATH is set by the
+// Electron shell; running from source it is unset and this stays where it was.
+export const ENV_PATH = process.env.MYSTORY_ENV_PATH || path.join(process.cwd(), '.env');
 
 /** Settable from the settings screen. */
 export const CONFIG_KEYS = [
