@@ -29,14 +29,14 @@ COPY --from=build /app/dist ./dist
 RUN mkdir -p /app/vault && chown -R node:node /app
 USER node
 
-ENV PORT=4747
+ENV PORT=38726
 ENV HOST=0.0.0.0
 ENV VAULT_DIR=/app/vault
-EXPOSE 4747
+EXPOSE 38726
 
 # A container that cannot reach its own port should be restarted, and one whose
 # model provider is down should not be — so this checks the app, not the models.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:4747/api/auth/status >/dev/null 2>&1 || exit 1
+  CMD wget -qO- http://127.0.0.1:38726/api/auth/status >/dev/null 2>&1 || exit 1
 
 CMD ["node", "dist/server.cjs"]

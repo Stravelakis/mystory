@@ -780,7 +780,19 @@ async function geminiTranscribe(
         `Transcribe this speech accurately in its original language. ${spoken} Return only the transcript text. Do not add any preamble, conversational commentary, formatting, or notes. Return only the transcript.`,
       ],
     });
-    const text = response?.text;
+
+    // The dedicated speech models do not answer in .text. Verified against
+    // gemini-3.5-transcribe on 20 Sep 2026: the transcript arrives as
+    // parts[].audioTranscription.text, and reading .text alone returned an
+    // empty string — so assigning that model to transcription looked like a
+    // silent failure rather than a wrong field.
+    const parts = (response as any)?.candidates?.[0]?.content?.parts || [];
+    const fromParts = parts
+      .map((p: any) => p?.audioTranscription?.text ?? p?.text ?? '')
+      .join('')
+      .trim();
+
+    const text = fromParts || response?.text;
     if (!text) throw new ProviderError('The transcript came back empty.', 0);
     return text.trim();
   } catch (err: any) {
@@ -790,6 +802,45 @@ async function geminiTranscribe(
       status,
     );
   }
+}
+
+/** Tidy a raw transcript without changing what was said.
+ *
+ *  Done as a separate pass rather than asked of the speech model, because the
+ *  speech models disagree about it: gemini-3.5-transcribe quietly drops
+ *  fillers whatever you ask, Whisper keeps most of them, and neither offers a
+ *  switch (checked 20 Sep 2026). Doing it here means the choice behaves the
+ *  same on every engine, including a local one.
+ *
+ *  The verbatim text is always kept. This produces a second version, never a
+ *  replacement. */
+export async function tidyTranscript(
+  config: Record<string, string>,
+  raw: string,
+): Promise<{ text: string; provider: string; model: string }> {
+  const result = await chat(config, {
+    task: 'title',
+    temperature: 0,
+    prompt: `Clean up this transcript of someone speaking about their own life.
+
+Remove: filler sounds (um, er, εμ), false starts, stutters, and accidental word
+repetitions. Fix punctuation and obvious slips of the tongue.
+
+Do NOT: change the words they chose, soften anything, tidy a fragment into a
+full sentence, reorder events, add a word that was not said, or translate it.
+Keep the language it is in.
+
+This is somebody's record of what happened to them. You are removing the noise
+of speech, nothing else. If you are unsure whether something is noise, keep it.
+
+Return only the cleaned transcript.
+
+Transcript:
+"""
+${raw}
+"""`,
+  });
+  return { text: result.text.trim(), provider: result.provider, model: result.model };
 }
 
 export interface TranscribeResult {

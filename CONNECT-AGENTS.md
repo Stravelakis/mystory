@@ -19,17 +19,17 @@ this project stopped being maintained tomorrow you would still have both.
 The base URL, and the passcode if you have set one.
 
 ```
-http://localhost:4747
+http://localhost:38726
 ```
 
 If a passcode is set, unlock once and keep the cookie:
 
 ```bash
-curl -c jar.txt -X POST http://localhost:4747/api/auth/unlock \
+curl -c jar.txt -X POST http://localhost:38726/api/auth/unlock \
   -H 'Content-Type: application/json' \
   -d '{"passcode":"your passcode"}'
 
-curl -b jar.txt http://localhost:4747/api/vault/entries
+curl -b jar.txt http://localhost:38726/api/vault/entries
 ```
 
 Every `/api` route needs that cookie. Without a passcode nothing does, which is
@@ -52,7 +52,7 @@ also why the app keeps telling you to set one.
 ### Writing
 
 ```bash
-curl -X POST http://localhost:4747/api/vault/entries \
+curl -X POST http://localhost:38726/api/vault/entries \
   -H 'Content-Type: application/json' \
   -d '{
     "title": "The move",

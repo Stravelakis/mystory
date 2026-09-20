@@ -74,6 +74,7 @@ import {
   isLocalOnly,
   synthesisChoices,
   slotsFor,
+  tidyTranscript,
   resolveProviders,
   listModels,
   TASKS,
@@ -86,11 +87,11 @@ import { timelineKey } from './vault.ts';
 
 dotenv.config();
 
-// 4747, not 3000. Port 3000 is the busiest number in local development —
+// 38726, not 3000. Port 3000 is the busiest number in local development —
 // Image Forge's dev server sits on it with strictPort, so whichever of the two
-// started second simply died. 4747 also avoids 3001, 4000, 5000, 5173, 8000,
+// started second simply died. 38726 also avoids 3001, 4000, 5000, 5173, 8000,
 // 8080 and 9000, so somebody else's machine is unlikely to collide either.
-const PORT = Number(process.env.PORT) || 4747;
+const PORT = Number(process.env.PORT) || 38726;
 // 0.0.0.0 means every interface, which on a machine that is also on your home
 // LAN is more than the tailnet. Set HOST to the Tailscale address to publish
 // there and nowhere else.
@@ -98,10 +99,10 @@ const PORT = Number(process.env.PORT) || 4747;
 // dual-stack mode when no host is given, which accepts IPv4 and IPv6 alike.
 //
 // It used to default to '0.0.0.0', which is IPv4 only. On Windows, localhost
-// resolves to ::1 before 127.0.0.1, so http://localhost:4747 hit a refused
+// resolves to ::1 before 127.0.0.1, so http://localhost:38726 hit a refused
 // IPv6 socket. Browsers retry the other family and appeared to work; anything
 // stricter — a health check, curl -6, a script — simply failed. Confirmed on
-// this machine 5 Sep 2026: [::1]:4747 actively refused while 127.0.0.1:4747
+// this machine 5 Sep 2026: [::1]:38726 actively refused while 127.0.0.1:38726
 // answered 200.
 const HOST = process.env.HOST || '';
 
@@ -290,11 +291,38 @@ async function startServer() {
         engine: req.body?.engine,
         language: req.body?.language,
       });
-      const transcript = result.text;
-      const entry = await saveEntry({ id, text: transcript });
+
+      // What came off the recording, before anything tidied it.
+      const spoken = result.text;
+      let transcript = spoken;
+      let verbatim: string | undefined;
+      let tidiedBy: string | undefined;
+
+      // "corrected" is the default, because reading back your own speech with
+      // every "um" in it is its own small discouragement. The raw version is
+      // always kept: STANDARDS §1, the recording is sacred, and so is what was
+      // actually said.
+      const style = req.body?.style === 'verbatim' ? 'verbatim' : 'corrected';
+      if (style === 'corrected' && spoken.trim().length > 20) {
+        try {
+          const tidy = await tidyTranscript(config, spoken);
+          if (tidy.text.trim()) {
+            transcript = tidy.text;
+            verbatim = spoken;
+            tidiedBy = `${tidy.provider}/${tidy.model}`;
+          }
+        } catch (err: any) {
+          // Failing to tidy costs the tidying, never the transcript.
+          console.warn('Transcript cleanup failed, keeping it verbatim:', err?.message || err);
+        }
+      }
+      const entry = await saveEntry({ id, text: transcript, verbatim });
       res.json({
         success: true,
         transcript,
+        verbatim,
+        style,
+        tidiedBy,
         entryId: id,
         entry,
         engine: { provider: result.provider, model: result.model, local: result.local },
@@ -1134,7 +1162,7 @@ Ask a gentle, open-ended question or request in 1-2 sentences that helps them ex
       console.error(
         `\n  !  Not allowed to listen on port ${PORT}.\n` +
           `     Ports below 1024 need administrator rights. Pick a higher one:\n` +
-          `     PORT=4747 npm run dev\n`,
+          `     PORT=38726 npm run dev\n`,
       );
       process.exit(1);
     }

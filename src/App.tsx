@@ -557,6 +557,7 @@ interface VaultEntry {
   found?: { id: string; evidence?: string }[];
   occurred?: Occurred;
   english?: string;
+  verbatim?: string;
   audio?: string;
   drive?: string;
   text: string;
@@ -735,6 +736,18 @@ function engineGroups(p: ProvidersState): PickerGroup[] {
   ];
 }
 
+/** Corrected is the default. Reading your own speech back with every "um" in
+ *  it is its own small discouragement, and the verbatim version is kept on
+ *  disk either way — so the safe choice is the readable one. */
+const STYLES: PickerGroup[] = [
+  {
+    options: [
+      { value: 'corrected', label: 'Tidied — fillers and false starts removed' },
+      { value: 'verbatim', label: 'Word for word — exactly as spoken' },
+    ],
+  },
+];
+
 const LANGUAGES: PickerGroup[] = [
   {
     options: [
@@ -753,6 +766,19 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   const [engine, setEngine] = useState('auto');
   const [detectedTags, setDetectedTags] = useState<string[]>([]);
   const [detectedIndicators, setDetectedIndicators] = useState<Indicator[]>([]);
+  const [style, setStyle] = useState<string>(() => localStorage.getItem('mystory.style') || 'corrected');
+  const styleRef = useRef(style);
+  useEffect(() => {
+    styleRef.current = style;
+    try {
+      localStorage.setItem('mystory.style', style);
+    } catch {
+      // A blocked store costs the preference, not the recording.
+    }
+  }, [style]);
+  const [verbatim, setVerbatim] = useState('');
+  const [showVerbatim, setShowVerbatim] = useState(false);
+
   const [occurred, setOccurred] = useState<Occurred>({});
   const [datingBusy, setDatingBusy] = useState(false);
   const [english, setEnglish] = useState('');
@@ -909,6 +935,8 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
       setDetectedTags(e.indicators || []);
       setOccurred(e.occurred || {});
       setEnglish(e.english || '');
+      setVerbatim(e.verbatim || '');
+      setShowVerbatim(false);
       setEnglishBy(null);
       setArchiveLink(e.drive || null);
       setArchiveError(null);
@@ -1168,6 +1196,7 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
         const formData = new FormData();
         formData.append('engine', engineRef.current);
         formData.append('language', languageRef.current);
+        formData.append('style', styleRef.current);
         const ext = recordedType.includes('mp4') ? 'm4a' : recordedType.includes('ogg') ? 'ogg' : 'webm';
         formData.append('audio', audioBlob, `recording.${ext}`);
 
@@ -1179,6 +1208,8 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
           if (data.entryId) setEntryId(data.entryId);
           if (data.success && data.transcript) {
             setTranscript(data.transcript);
+            setVerbatim(data.verbatim || '');
+            setShowVerbatim(false);
             setSavedAt(data.entry?.updated || new Date().toISOString());
             await handleAutoArchive(data.transcript, data.entryId);
           } else {
@@ -1465,6 +1496,14 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
                 <Picker id="pick-lang" value={language} onChange={setLanguage} groups={LANGUAGES} />
               </div>
               <div className="field">
+                <label htmlFor="pick-style">How to write it down</label>
+                <Picker id="pick-style" value={style} onChange={setStyle} groups={STYLES} />
+                <span className="fhint">
+                  Either way the exact words you spoke are kept in the file. Tidying
+                  only changes which version you read first.
+                </span>
+              </div>
+              <div className="field">
                 <label>Entry title</label>
                 <div className="flex gap-2 items-stretch">
                   <span className="inwrap cut-sm flex-1">
@@ -1607,6 +1646,23 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
               </div>
             )}
           </Frame>
+
+          {verbatim && (
+            <Frame title="Word for word">
+              <p className="sec-note" style={{ marginBottom: 'var(--gap)' }}>
+                What you actually said, before the fillers were taken out. Kept in
+                the file beside the tidied version.
+              </p>
+              <button className="btn btn-sm cut-sm" onClick={() => setShowVerbatim(v => !v)}>
+                {showVerbatim ? 'Hide it' : 'Show it'}
+              </button>
+              {showVerbatim && (
+                <p className="sec-note" style={{ marginTop: 'var(--gap)', whiteSpace: 'pre-wrap' }}>
+                  {verbatim}
+                </p>
+              )}
+            </Frame>
+          )}
 
           <Frame title="In English">
             <p className="sec-note" style={{ marginBottom: 'var(--gap)' }}>

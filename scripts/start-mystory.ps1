@@ -16,7 +16,7 @@ $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
 # Read PORT from .env if it is set there, else the app's default.
-$Port = 4747
+$Port = 38726
 if (Test-Path (Join-Path $Root '.env')) {
   $m = Select-String -Path (Join-Path $Root '.env') -Pattern '^\s*PORT\s*=\s*"?(\d+)"?' -ErrorAction SilentlyContinue
   if ($m) { $Port = [int]$m.Matches[0].Groups[1].Value }

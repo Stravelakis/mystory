@@ -94,6 +94,10 @@ export interface Entry {
   /** The entry rendered in English, when the original is not. The original is
    *  never replaced — testimony is the words that were actually used. */
   english?: string;
+  /** The raw transcript, when the text above is a cleaned version of it.
+   *  Same principle as `english`: the tidier version is the convenience, and
+   *  the words actually spoken stay on disk. */
+  verbatim?: string;
   text: string;
 }
 
@@ -141,6 +145,7 @@ function serialize(e: Entry): string {
     // call: an evidence quote can contain commas, colons and newlines, which a
     // naive key: value line cannot survive.
     e.found?.length ? `found: ${JSON.stringify(e.found)}` : '',
+    e.verbatim ? `verbatim: ${JSON.stringify(e.verbatim)}` : '',
     e.audio ? `audio: ${e.audio}` : '',
     e.drive ? `drive: ${e.drive}` : '',
     '---',
@@ -210,6 +215,16 @@ function parse(id: string, raw: string): Entry {
     audio: meta.audio || undefined,
     drive: meta.drive || undefined,
     english,
+    // JSON-encoded on one line: a spoken transcript is full of the commas and
+    // colons a naive key: value line cannot survive.
+    verbatim: (() => {
+      if (!meta.verbatim) return undefined;
+      try {
+        return JSON.parse(meta.verbatim);
+      } catch {
+        return meta.verbatim;
+      }
+    })(),
     text,
   };
 }
@@ -254,6 +269,7 @@ export interface SaveInput {
   found?: StoredIndicator[];
   occurred?: Occurred;
   english?: string;
+  verbatim?: string;
   audio?: string;
   drive?: string;
 }
@@ -281,6 +297,7 @@ export async function saveEntry(input: SaveInput): Promise<Entry> {
     // the range.
     occurred: { ...(existing?.occurred || {}), ...(input.occurred || {}) },
     english: input.english ?? existing?.english,
+    verbatim: input.verbatim ?? existing?.verbatim,
     audio: input.audio ?? existing?.audio,
     drive: input.drive ?? existing?.drive,
     text: input.text ?? existing?.text ?? '',

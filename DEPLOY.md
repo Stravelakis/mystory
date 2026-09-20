@@ -11,7 +11,7 @@ npm run build
 ```
 
 ### 2. Create the Systemd Caretaker Service
-We will create a service that automatically starts the app on port 4747.
+We will create a service that automatically starts the app on port 38726.
 
 Copy and paste this exact block into your terminal:
 
@@ -47,7 +47,7 @@ sudo systemctl start mystory.service
 
 ### 4. Access via Tailscale
 Open your browser on your phone or laptop connected to your Tailscale network and navigate to:
-`http://<YOUR_MINIPC_TAILSCALE_IP>:4747`
+`http://<YOUR_MINIPC_TAILSCALE_IP>:38726`
 
 **Set a passcode, and bind to the tailnet.** Do both.
 
@@ -92,7 +92,7 @@ If that is fiddly, `tailscale status` prints the machine's full name and you
 can pass it to `tailscale cert` by hand. Then publish the app on it:
 
 ```bash
-sudo tailscale serve --bg 4747
+sudo tailscale serve --bg 38726
 ```
 
 `tailscale serve` puts the app behind your tailnet's HTTPS hostname —

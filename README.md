@@ -65,7 +65,7 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:4747>.
+Open <http://localhost:38726>.
 
 Or, with Docker:
 
@@ -300,9 +300,9 @@ Setting it up is a one-time job in the
 
 **On the redirect URI:** Google accepts `http://localhost` or any `https`
 origin, but not `http://` on a private address — so
-`http://100.x.x.x:4747/auth/callback` is rejected. Either register
-`http://localhost:4747/auth/callback` and link once from a browser on the
-machine itself (or through `ssh -L 4747:localhost:4747`), or put the app behind
+`http://100.x.x.x:38726/auth/callback` is rejected. Either register
+`http://localhost:38726/auth/callback` and link once from a browser on the
+machine itself (or through `ssh -L 38726:localhost:38726`), or put the app behind
 a Tailscale HTTPS hostname and register that. The link survives restarts.
 
 ---
@@ -327,7 +327,7 @@ in.
 
 | | |
 |---|---|
-| `npm run dev` | Express + Vite middleware, port 4747 |
+| `npm run dev` | Express + Vite middleware, port 38726 |
 | `npm run build` | client into `dist/`, server into `dist/server.cjs` |
 | `npm start` | run the built server |
 | `npm run lint` | `tsc --noEmit` |
