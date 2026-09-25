@@ -1,6 +1,6 @@
 # ⚒ My Story — Engineering Handoff
 
-Everything a fresh session needs. Updated 25 Sep 2026.
+Everything a fresh session needs. Updated 25 Sep 2026 (v1.0.0).
 
 ---
 
@@ -49,12 +49,14 @@ Read this first. Everything after it is the permanent reference.
    The owner sets it: Settings → The lock.
 3. **Reboot survival not proven.** The service is enabled and linger is on,
    but the machine has not been rebooted since.
-4. **Windows installer never built.** `npm run build-exe` is configured
-   (electron-builder, NSIS + portable, keeps user data on uninstall) but has
-   not been run.
-5. **Secret scan:** the standards want the pre-commit hook to run
-   `gitleaks`. `githooks/pre-commit` is hand-rolled regex. Swap it.
-6. **No test suite.** Say so in any release notes (standards §2).
+4. ~~Windows installer~~ — **done in v1.0.0.** Built by
+   `.github/workflows/release.yml` on every `v*` tag and attached to the
+   release. Smoke-tested: it starts from any working directory, serves the
+   client, and Repair reports healthy.
+5. ~~Secret scan~~ — **done.** The hook runs gitleaks, then the
+   private-address check. CI runs gitleaks over the whole history.
+6. **No test suite.** Say so in any release notes (standards §2). Adding one
+   is the next quality step.
 7. ~~Image Forge and LocalAI~~ — **settled:** Image Forge is a separate
    project, the owner's workplace, and keeps using LocalAI for images. "No
    LocalAI" applies to My Story only. The gitignored `.mcp.json` here is
@@ -62,6 +64,17 @@ Read this first. Everything after it is the permanent reference.
 
 ### Things that will bite
 
+- **`CLOUD_CONSENT=yes` must be in the server's `.env`** (v1.0.0 consent
+  gate). Without it every cloud job is refused. The owner has consented;
+  tick the box in Settings or add the line.
+- The Electron entry is `electron/main.cjs` (the package is ESM). It sets
+  `NODE_ENV=production`, because in dev mode the server starts Vite, and
+  inside the asar Vite can't spawn esbuild, so the window hangs.
+- Building the installer on Windows without Developer Mode fails while
+  unpacking electron-builder's `winCodeSign` cache (symlinks). Extract the
+  `.7z` by hand into `Cache/winCodeSign/winCodeSign-2.6.0`. CI is unaffected.
+- Release: branch, PR, `gh pr merge`, tag `vX.Y.Z` on main, push the tag.
+  The tag builds the installer and the docs site.
 - `dotenv` now reads `ENV_PATH` (honours `MYSTORY_ENV_PATH`). Server settings
   live in `~/.config/mystory/.env`, not the checkout.
 - Shell heredocs mangle backticks and `$` in this environment. Write patch

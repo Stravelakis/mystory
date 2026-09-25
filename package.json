@@ -1,7 +1,7 @@
 {
   "name": "mystory",
   "private": false,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -73,7 +73,7 @@
     "offline"
   ],
   "author": "stravelakis",
-  "main": "electron/main.js",
+  "main": "electron/main.cjs",
   "build": {
     "appId": "net.stravelakis.mystory",
     "productName": "My Story",
