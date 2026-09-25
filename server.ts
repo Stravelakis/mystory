@@ -614,9 +614,12 @@ async function startServer() {
       // and any recording it fails on, go to DeepL and then a model.
       let result: { text: string; engine: string; rewritten: boolean; detected?: string } | null = null;
       const geminiKey = config.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
-      const liveModel = config.LIVE_TRANSLATE_MODEL || 'gemini-3.5-live-translate-preview';
+      // Off unless LIVE_TRANSLATE_MODEL is set. It dropped the last sentence in
+      // every test (25 Sep 2026), so translation goes straight to DeepL. The
+      // code stays so it can be switched back on if Google fixes it.
+      const liveModel = (config.LIVE_TRANSLATE_MODEL || '').trim();
 
-      if (isValidId(id) && geminiKey && config.MODEL_ROUTING !== 'local-only') {
+      if (liveModel && isValidId(id) && geminiKey && config.MODEL_ROUTING !== 'local-only') {
         const recording = await findAudio(id);
         if (recording) {
           try {
