@@ -10,6 +10,21 @@
       ],
       "port": 38726,
       "autoPort": false
+    },
+    {
+      "name": "docs",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "docs",
+        "run",
+        "preview",
+        "--",
+        "--port",
+        "38728"
+      ],
+      "port": 38728,
+      "url": "http://localhost:38728"
     }
   ]
 }

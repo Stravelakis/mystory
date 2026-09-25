@@ -1,0 +1,42 @@
+name: CI
+
+# Typecheck and build on every push and pull request. There is no test suite
+# yet; this is the floor, not the ceiling.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # The server and client build do not need Electron's 100 MB binary.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # The same scan the pre-commit hook runs, over the whole history, so a
+      # commit made without the hook is still caught. The official image, not
+      # gitleaks-action: the action needs a paid licence on organisation repos.
+      - run: >-
+          docker run --rm -v "$PWD:/repo"
+          -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0="*"
+          ghcr.io/gitleaks/gitleaks:latest git /repo --redact --verbose

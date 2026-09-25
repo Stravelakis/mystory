@@ -1,0 +1,36 @@
+name: Windows installer
+
+# On every version tag: build the NSIS installer and the portable exe, and
+# attach both to the GitHub Release for that tag (created here if it does not
+# exist yet, with notes generated from merged PRs).
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build-exe
+        env:
+          # No code-signing certificate; do not let electron-builder go looking.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - name: Attach to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --generate-notes --verify-tag
+          gh release upload "$tag" release/*.exe --clobber

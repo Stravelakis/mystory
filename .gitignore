@@ -28,3 +28,6 @@ generated-images/
 !brand/
 
 release/
+
+# Docs site build output.
+docs/.astro/
