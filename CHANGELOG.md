@@ -6,7 +6,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 ## [Unreleased]
 
 ### Added
+- A test suite: `npm test` (vitest), run in CI. It covers the vault round trip, timeline order, chapter parts, indicator evidence, and the routing and consent promises.
 - Long chapters are drafted in parts that each fit one model call. Each part is saved to `vault/chapters/` as soon as it finishes. If a part fails, the parts before it are kept, and **Continue** (or **Finish drafting**) picks up at the missing part. Saved chapters are listed in Synthesis → Episodes.
+
+### Fixed
+- Reading an entry returned its text with a trailing newline that was not saved.
 
 ## [1.0.0] - 2026-09-25
 

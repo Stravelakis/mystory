@@ -1,7 +1,7 @@
 name: CI
 
-# Typecheck and build on every push and pull request. There is no test suite
-# yet; this is the floor, not the ceiling.
+# Typecheck, tests and build on every push and pull request, and a secret
+# scan over the whole history.
 
 on:
   push:
@@ -25,6 +25,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      - run: npm test
       - run: npm run build
 
   secrets:
