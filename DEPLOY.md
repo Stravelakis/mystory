@@ -1,4 +1,52 @@
-# Deployment on MiniPC
+# Deployment
+
+## How it runs today (mini PC, tailnet only)
+
+This is the live install, set up 25 Sep 2026. Everything below it in this file
+is the general guide.
+
+| | |
+|---|---|
+| Address | `https://<machine>.<tailnet>.ts.net:38726` — tailnet only |
+| Code | `~/apps/mystory` (a git checkout) |
+| Settings and keys | `~/.config/mystory/.env`, mode 600 |
+| Your writing | `~/.local/share/mystory/vault` |
+| Service | `systemctl --user status mystory` (starts on boot via linger) |
+| Logs | `journalctl --user -u mystory -f` |
+
+The settings and the vault live **outside** the code folder on purpose: a
+`git pull` or a rebuild can replace every file in `~/apps/mystory` and cannot
+reach a single entry.
+
+### Update it
+
+```bash
+cd ~/apps/mystory && git pull --ff-only
+ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci && npm run build
+systemctl --user restart mystory
+```
+
+`ELECTRON_SKIP_BINARY_DOWNLOAD` skips a ~100 MB download the server never uses.
+
+### Why it is safe to reach
+
+- The app binds **127.0.0.1** only. Nothing on the LAN can reach port 38726.
+- The single way in is `tailscale serve --https=38726`, which is **tailnet
+  only**. Check any time with `tailscale serve status` — the line must say
+  `(tailnet only)`.
+
+> **⚠️ Never serve this on port 443 of a machine with Funnel on.** Funnel
+> publishes a port to the whole internet. If a machine already has Funnel on
+> 443 (for n8n, say), anything added to 443 is public too. Use a separate
+> HTTPS port, as above.
+
+### Set a passcode
+
+Tailnet-only is not the same as private: every device on your tailnet can
+reach it, including a phone that gets lost. Settings → The lock.
+
+---
+
 
 To ensure "My Story" runs continuously on your MiniPC (surviving power outages), follow these simple bash copy-paste instructions.
 

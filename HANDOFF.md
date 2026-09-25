@@ -185,3 +185,24 @@ asking whether it was *done to* the person, a *position* they held, something
 *they did*, or something that *protected* them.
 
 **Change a user-facing message** → the wording is the feature.
+
+## 11. The Live API (live.ts)
+
+Everyday jobs go to Gemini's streaming Live API first. None of it behaves
+like the ordinary API, and every quirk below cost a failed test to find
+(25 Sep 2026):
+
+| Model | Job | What it actually does |
+|---|---|---|
+| `gemini-3.8-live-extended-thinking` | all text jobs | **speaks** its answer; we read Google's transcript of the speech. Needs a thinking level. Without the "silent function" system instruction it chats instead of answering. |
+| `gemini-3.5-transcribe-live` | transcription | returns the transcript as `inputTranscription`, then closes 1008 — that close is success |
+| `gemini-3.5-live-translate-preview` | translating recordings | speech in, speech out. Ignores text. **Drops the final sentence every time** in testing, so a sentence-count guard rejects it and DeepL takes over |
+| `gemini-3.8-live` | — | audio-only, cannot do text jobs at all |
+
+- Each Live session carries ~2,600 tokens of Google's own preamble.
+- Audio must be 16 kHz mono PCM, so recordings go through **ffmpeg**. Without
+  ffmpeg the Live audio path fails over to the ordinary API.
+- A job with a required shape passes `validate` to `chat()`; an answer that
+  fails it moves on to the next model instead of becoming "nothing found".
+
+Fallbacks: `gemini-3.5-flash-lite`, then `gemma-4-31b-it`.
