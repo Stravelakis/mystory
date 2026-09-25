@@ -7,6 +7,8 @@
 
 FROM node:22-alpine AS build
 WORKDIR /app
+# The server never runs Electron. Skip its ~100MB binary.
+ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
 
 COPY package.json package-lock.json ./
 RUN npm ci
