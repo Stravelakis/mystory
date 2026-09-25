@@ -16,6 +16,14 @@ export const siteConfig = {
   // Path under /public including the base path, e.g. '/repo-name/favicon.svg'. Empty = no favicon tag.
   faviconHref: '/mystory/favicon.png',
 
+  // What a link to the site shows when shared (Open Graph / Twitter cards).
+  // The image is under /public, 1200x630; rebuild it with
+  // npx electron scripts/social/render.cjs from the repo root.
+  seoTitle: 'My Story: a private, self-hosted journal in Greek and English',
+  socialImage: 'og-image.png',
+  socialImageAlt: 'My Story: an art-deco journal on a pedestal, with the tagline "A private journal on your own machine."',
+  locale: 'en_GB',
+
   // Sidebar menu. Each id must match an element id on the page.
   nav: [
     { id: 'top', label: 'Overview' },
