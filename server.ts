@@ -1240,7 +1240,13 @@ Ask a gentle, open-ended question or request in 1-2 sentences that helps them ex
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    // Beside the bundle when running dist/server.cjs: inside the desktop app
+    // that is resources/app.asar/dist, and the working directory is not the
+    // app at all. The cwd form covers anything else.
+    const distPath =
+      typeof __dirname !== 'undefined' && path.basename(__dirname) === 'dist'
+        ? __dirname
+        : path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
@@ -1255,7 +1261,7 @@ Ask a gentle, open-ended question or request in 1-2 sentences that helps them ex
         `\n  !  Port ${PORT} is already in use, so My Story did not start.\n` +
           `     Something else is listening there — another copy of this app, or\n` +
           `     another project's dev server.\n\n` +
-          `     Start it somewhere else instead:   PORT=4748 npm run dev\n`,
+          `     Start it somewhere else instead:   PORT=38730 npm run dev\n`,
       );
       process.exit(1);
     }
