@@ -622,15 +622,20 @@ async function startServer() {
           try {
             const english = await liveTranslateSpeech(geminiKey, liveModel, await fs.readFile(recording));
 
-            // An interpreter that stops early does not say so — it just hands
-            // back part of the entry. English runs about as long as Greek, so
-            // an answer under half the length of what was said is treated as
-            // cut off, and the text path takes over. A silently shortened
+            // An interpreter that stops early does not say so — it hands back
+            // part of the entry. A length ratio was not enough: "…it never
+            // happened. And" passed at 56% while a whole sentence was missing.
+            // So every sentence spoken has to come back as a complete sentence,
+            // and the answer may not end mid-thought. A silently shortened
             // translation of someone's testimony is worse than none.
-            const ratio = english.length / Math.max(1, text.length);
-            if (ratio < 0.5) {
+            const sentences = (t: string) => (t.match(/[^.!?;…]+[.!?;…]+/g) || []).length;
+            const spokenCount = Math.max(1, sentences(text));
+            const endsCleanly = /[.!?…"'»)\]]\s*$/.test(english.trim());
+            if (sentences(english) < spokenCount || !endsCleanly) {
               throw new Error(
-                `Live Translate returned ${english.length} characters for ${text.length} spoken — looks cut off.`,
+                `Live Translate returned ${sentences(english)} of ${spokenCount} sentences${
+                  endsCleanly ? '' : ', ending mid-sentence'
+                } — treated as cut off.`,
               );
             }
             result = { text: english, engine: 'gemini-live', rewritten: true };
