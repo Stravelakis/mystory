@@ -8,6 +8,13 @@ on:
   push:
     tags:
       - "v*"
+  # Rebuild and re-attach for a tag that already exists, e.g. after a failed
+  # run, without moving the tag: Actions → Windows installer → Run workflow.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag, e.g. v1.0.0"
+        required: true
 
 permissions:
   contents: write
@@ -17,6 +24,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -32,7 +41,9 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          # Through env, never pasted into the script: a typed input is text.
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          tag="${GITHUB_REF_NAME}"
+          tag="$TAG"
           gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --generate-notes --verify-tag
           gh release upload "$tag" release/*.exe --clobber
