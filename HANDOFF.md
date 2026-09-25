@@ -57,7 +57,7 @@ Read this first. Everything after it is the permanent reference.
 6. **No test suite.** Say so in any release notes (standards §2).
 7. ~~Image Forge and LocalAI~~ — **settled:** Image Forge is a separate
    project, the owner's workplace, and keeps using LocalAI for images. "No
-   LocalAI" applies to My Story only. The gitignored  here is
+   LocalAI" applies to My Story only. The gitignored `.mcp.json` here is
    just forge wiring for making this project's brand art.
 
 ### Things that will bite
