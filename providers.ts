@@ -134,6 +134,17 @@ export function readRouting(config: Record<string, string>): Routing {
 /** True when the app must not call anything but the local endpoints. Google
  *  Drive is switched off by the same flag — mirroring a journal into someone
  *  else's datacentre is exactly the thing being refused here. */
+/** Consent to send entries to cloud providers (repo standards §3: a consent
+ *  checkbox wherever personal data is collected — and nothing here is more
+ *  personal). Until it is given, only providers on this machine may be asked.
+ *  Settings → Models, "I understand…". */
+export function hasCloudConsent(config: Record<string, string>): boolean {
+  return (config.CLOUD_CONSENT || '').trim() === 'yes';
+}
+
+export const NO_CONSENT_MESSAGE =
+  'Cloud AI is not switched on yet. Your entries would be sent to the provider, so the app asks first: Settings → Models → tick "I understand where my words go".';
+
 export function isLocalOnly(config: Record<string, string>): boolean {
   return readRouting(config) === 'local-only';
 }
@@ -680,7 +691,9 @@ export interface ChatResult {
  *  the first answer. Every failure is recorded and stepped over. */
 export async function chat(config: Record<string, string>, req: ChatRequest): Promise<ChatResult> {
   const providers = resolveProviders(config);
-  const allowed = chainFor(config, providers);
+  const consented = hasCloudConsent(config);
+  const allowed = chainFor(config, providers).filter(p => p.local || consented);
+  if (!consented && allowed.length === 0) throw new Error(NO_CONSENT_MESSAGE);
   const byId = new Map(allowed.map(p => [p.id, p]));
 
   // What to try, in order.
@@ -898,7 +911,9 @@ export async function transcribe(
     : 'The recording is in English or Greek, or a mix of both.';
 
   const providers = resolveProviders(config);
-  const allowed = chainFor(config, providers);
+  const consented = hasCloudConsent(config);
+  const allowed = chainFor(config, providers).filter(p => p.local || consented);
+  if (!consented && allowed.length === 0) throw new Error(NO_CONSENT_MESSAGE);
   const byId = new Map(allowed.map(p => [p.id, p]));
 
   const attempts: { p: Provider; model: string }[] = [];

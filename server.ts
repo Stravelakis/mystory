@@ -73,6 +73,8 @@ import {
   probe,
   readRouting,
   isLocalOnly,
+  hasCloudConsent,
+  NO_CONSENT_MESSAGE,
   synthesisChoices,
   slotsFor,
   tidyTranscript,
@@ -606,6 +608,8 @@ async function startServer() {
 
     try {
       const config = await loadConfig();
+      // DeepL is a cloud service too.
+      if (!hasCloudConsent(config)) return res.json({ success: false, error: NO_CONSENT_MESSAGE });
 
       // When the entry has a recording, translate the SPEECH with Gemini Live
       // Translate — it hears tone and hesitation that a transcript flattens,
@@ -785,6 +789,7 @@ ${text}
         success: true,
         routing: readRouting(config),
         localOnly: isLocalOnly(config),
+        cloudConsent: hasCloudConsent(config),
         providers: await probe(config, deep),
         loaded: deep,
         tasks: TASKS,

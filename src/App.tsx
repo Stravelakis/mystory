@@ -622,6 +622,7 @@ interface TaskInfo {
 interface ProvidersState {
   routing: string;
   localOnly: boolean;
+  cloudConsent?: boolean;
   providers: ProviderInfo[];
   loaded: boolean;
   tasks: TaskInfo[];
@@ -2414,6 +2415,31 @@ function SettingsCenter({
         <p className="fhint mt-4">
           Trashed entries move to <code>.trash</code> inside that folder. Nothing in this app deletes anything.
         </p>
+      </Frame>
+
+      <Frame title="Where your words go" className="mb-6" lit={config.CLOUD_CONSENT === 'yes'}>
+        <p className="sec-note">
+          When a cloud provider does a job — transcribing, naming patterns, drafting a
+          chapter, translating — what you wrote or said is sent to that company and
+          handled under its terms. On free tiers that can include being used to
+          improve their products and being read by their reviewers. Local-only routing
+          sends nothing anywhere.
+        </p>
+        <label className="flex items-start gap-3" style={{ cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={config.CLOUD_CONSENT === 'yes'}
+            onChange={e => handleChange('CLOUD_CONSENT', e.target.checked ? 'yes' : '')}
+            style={{ marginTop: 4, width: 18, height: 18 }}
+          />
+          <span>
+            <b>I understand where my words go</b>, and I want cloud providers to be used.
+            <span className="fhint" style={{ display: 'block', marginTop: 4 }}>
+              Until this is ticked, only models on this machine are asked. Untick it any
+              time. Remember to press Save all.
+            </span>
+          </span>
+        </label>
       </Frame>
 
       <Frame title="Models" className="mb-6" lit={providers.localOnly}>
