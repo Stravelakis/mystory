@@ -55,9 +55,10 @@ Read this first. Everything after it is the permanent reference.
 5. **Secret scan:** the standards want the pre-commit hook to run
    `gitleaks`. `githooks/pre-commit` is hand-rolled regex. Swap it.
 6. **No test suite.** Say so in any release notes (standards §2).
-7. **Image Forge** (`.mcp.json`, gitignored) points at the laptop's LocalAI
-   for images. That was the only engine that got the art right. Check with the
-   owner whether "no LocalAI" covers image generation too.
+7. ~~Image Forge and LocalAI~~ — **settled:** Image Forge is a separate
+   project, the owner's workplace, and keeps using LocalAI for images. "No
+   LocalAI" applies to My Story only. The gitignored  here is
+   just forge wiring for making this project's brand art.
 
 ### Things that will bite
 
