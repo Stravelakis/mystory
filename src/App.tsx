@@ -1796,13 +1796,16 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
             </div>
           </Frame>
 
-          <div className="callout warn">
-            <span className="cd" />
-            <span>
-              <b>Microphone.</b> A browser will not grant the microphone inside an embedded preview. Open the app in
-              its own tab if RECORD captures nothing.
-            </span>
-          </div>
+          {/* Only true inside an iframe; shown everywhere it was just noise. */}
+          {window.self !== window.top && (
+            <div className="callout warn">
+              <span className="cd" />
+              <span>
+                <b>Microphone.</b> A browser will not grant the microphone inside an embedded preview. Open the app in
+                its own tab if RECORD captures nothing.
+              </span>
+            </div>
+          )}
         </div>
       </div>
     </motion.div>
