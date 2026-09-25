@@ -24,6 +24,7 @@
    ========================================================================== */
 
 import { GoogleGenAI } from '@google/genai';
+import { liveChat, liveTranscribe } from './live.ts';
 
 export type Routing = 'cloud-first' | 'local-first' | 'local-only';
 
@@ -64,7 +65,7 @@ export const TASKS: { id: Task; label: string; blurb: string }[] = [
 export interface Provider {
   id: string;
   label: string;
-  kind: 'openai' | 'gemini';
+  kind: 'openai' | 'gemini' | 'gemini-live';
   local: boolean;
   /** OpenAI-compatible root, including /v1. Empty for the Gemini SDK. */
   baseUrl: string;
@@ -92,6 +93,10 @@ export interface ChatRequest {
   maxTokens?: number;
   /** Synthesis pins the exact model the user chose for this one run. */
   model?: string;
+  /** For jobs with a required shape. An answer that fails it counts as a
+   *  failure, so the next model in the chain gets a turn — instead of an
+   *  unparseable answer quietly becoming "nothing found". */
+  validate?: (text: string) => boolean;
   providerId?: string;
 }
 
@@ -354,6 +359,29 @@ export function resolveProviders(config: Record<string, string>): Provider[] {
       // models" in Settings and pick from what the account actually has.
       chat: {},
       stt: [],
+      canList: true,
+    });
+
+    // The same key, reached through the streaming Live API — a separate
+    // provider because it behaves nothing like the ordinary one (see live.ts).
+    // Verified 25 Sep 2026: these are the two Live models that return usable
+    // text on this key. gemini-3.8-live (without extended thinking) is
+    // audio-only and cannot do text jobs at all.
+    list.push({
+      id: 'gemini-live',
+      label: 'Google Gemini Live',
+      kind: 'gemini-live',
+      local: false,
+      baseUrl: '',
+      apiKey: geminiKey,
+      chat: {
+        indicators: ['gemini-3.8-live-extended-thinking'],
+        companion: ['gemini-3.8-live-extended-thinking'],
+        title: ['gemini-3.8-live-extended-thinking'],
+        when: ['gemini-3.8-live-extended-thinking'],
+        synthesis: ['gemini-3.8-live-extended-thinking'],
+      },
+      stt: ['gemini-3.5-transcribe-live'],
       canList: true,
     });
   }
@@ -686,7 +714,15 @@ export async function chat(config: Record<string, string>, req: ChatRequest): Pr
   const failures: string[] = [];
   for (const { p, model } of attempts) {
     try {
-      const text = p.kind === 'gemini' ? await geminiChat(p, model, req) : await openaiChat(p, model, req);
+      const text =
+        p.kind === 'gemini-live'
+          ? await liveChat(p.apiKey, model, req.prompt)
+          : p.kind === 'gemini'
+            ? await geminiChat(p, model, req)
+            : await openaiChat(p, model, req);
+      if (req.validate && !req.validate(text)) {
+        throw new Error('answered, but not in the shape this job needs');
+      }
       console.info(`[${req.task}] ${p.id}/${model}`);
       return { text, provider: p.id, model, local: p.local };
     } catch (err: any) {
@@ -890,9 +926,11 @@ export async function transcribe(
   for (const { p, model } of picked) {
     try {
       const text =
-        p.kind === 'gemini'
-          ? await geminiTranscribe(p, model, buffer, mimetype, spoken)
-          : await openaiTranscribe(p, model, buffer, mimetype, language, spoken);
+        p.kind === 'gemini-live'
+          ? await liveTranscribe(p.apiKey, model, buffer)
+          : p.kind === 'gemini'
+            ? await geminiTranscribe(p, model, buffer, mimetype, spoken)
+            : await openaiTranscribe(p, model, buffer, mimetype, language, spoken);
       console.info(`[transcribe] ${p.id}/${model}`);
       return { text, provider: p.id, model, local: p.local };
     } catch (err: any) {
@@ -917,7 +955,7 @@ export async function transcribe(
 /** Google is not OpenAI-shaped, so its listing is its own call. This is the
  *  single most useful request in the app for a Gemini user: it returns exactly
  *  the models that key is entitled to, on that tier, today. */
-async function listGeminiModels(apiKey: string): Promise<string[]> {
+async function listGeminiModels(apiKey: string, method = 'generateContent'): Promise<string[]> {
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}&pageSize=200`,
     { signal: AbortSignal.timeout(15_000) },
@@ -925,7 +963,7 @@ async function listGeminiModels(apiKey: string): Promise<string[]> {
   if (!res.ok) throw new Error(explain(res.status, await res.text(), 'gemini'));
   const data: any = await res.json();
   return (data?.models || [])
-    .filter((m: any) => (m?.supportedGenerationMethods || []).includes('generateContent'))
+    .filter((m: any) => (m?.supportedGenerationMethods || []).includes(method))
     .map((m: any) => String(m?.name || '').replace(/^models\//, ''))
     .filter(Boolean)
     .sort();
@@ -933,6 +971,7 @@ async function listGeminiModels(apiKey: string): Promise<string[]> {
 
 export async function listModels(p: Provider): Promise<string[]> {
   if (p.kind === 'gemini') return listGeminiModels(p.apiKey);
+  if (p.kind === 'gemini-live') return listGeminiModels(p.apiKey, 'bidiGenerateContent');
   if (!p.baseUrl) return [];
   const res = await fetch(`${p.baseUrl}/models`, {
     headers: authHeaders(p),

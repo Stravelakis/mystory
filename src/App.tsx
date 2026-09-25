@@ -782,7 +782,7 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   const [occurred, setOccurred] = useState<Occurred>({});
   const [datingBusy, setDatingBusy] = useState(false);
   const [english, setEnglish] = useState('');
-  const [englishBy, setEnglishBy] = useState<'deepl' | 'model' | null>(null);
+  const [englishBy, setEnglishBy] = useState<'deepl' | 'model' | 'gemini-live' | null>(null);
   const [translating, setTranslating] = useState(false);
   const [providers] = useProviders();
   const [aiResponse, setAiResponse] = useState('');
@@ -1677,6 +1677,7 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
                 </span>
               </button>
               {englishBy === 'deepl' && <span className="tag good">DeepL</span>}
+              {englishBy === 'gemini-live' && <span className="tag good">Gemini Live — from your voice</span>}
               {englishBy === 'model' && <span className="tag">a language model</span>}
             </div>
 

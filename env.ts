@@ -30,6 +30,7 @@ export const CONFIG_KEYS = [
   // and MODEL_ROUTING decides whether the cloud may be asked at all.
   'MODEL_ROUTING',
   'TRANSCRIBE_STYLE',
+  'LIVE_TRANSLATE_MODEL',
   'LOCAL_CHAT_BASE_URL',
   'LOCAL_CHAT_MODEL',
   'LOCAL_CHAT_API_KEY',

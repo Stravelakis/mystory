@@ -82,6 +82,7 @@ import {
 } from './providers.ts';
 import { buildPrompt, normalise, loadTerms, CATEGORIES } from './vocabulary.ts';
 import { translate } from './translate.ts';
+import { liveTranslateSpeech } from './live.ts';
 import { draftEpisode, proposeEpisodes } from './episodes.ts';
 import { repair, checkUpdate } from './maintenance.ts';
 import { timelineKey } from './vault.ts';
@@ -455,6 +456,16 @@ async function startServer() {
           prompt: await buildPrompt(transcript),
           temperature: 0.1,
           json: true,
+          validate: (t: string) => {
+            const m = t.match(/\{[\s\S]*\}/);
+            if (!m) return false;
+            try {
+              JSON.parse(m[0]);
+              return true;
+            } catch {
+              return false;
+            }
+          },
         });
 
         // Small models fence their JSON, prepend a sentence, or return a bare
@@ -590,7 +601,29 @@ async function startServer() {
 
     try {
       const config = await loadConfig();
-      const result = await translate(config, text);
+
+      // When the entry has a recording, translate the SPEECH with Gemini Live
+      // Translate — it hears tone and hesitation that a transcript flattens,
+      // and it is on the free Live allowance. It cannot take typed text at all
+      // (verified 25 Sep 2026: a text turn gets silence), so typed entries,
+      // and any recording it fails on, go to DeepL and then a model.
+      let result: { text: string; engine: string; rewritten: boolean; detected?: string } | null = null;
+      const geminiKey = config.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+      const liveModel = config.LIVE_TRANSLATE_MODEL || 'gemini-3.5-live-translate-preview';
+
+      if (isValidId(id) && geminiKey && config.MODEL_ROUTING !== 'local-only') {
+        const recording = await findAudio(id);
+        if (recording) {
+          try {
+            const english = await liveTranslateSpeech(geminiKey, liveModel, await fs.readFile(recording));
+            result = { text: english, engine: 'gemini-live', rewritten: true };
+          } catch (err: any) {
+            console.warn('Live Translate failed, falling back to text translation:', err?.message || err);
+          }
+        }
+      }
+
+      if (!result) result = await translate(config, text);
 
       // Saved with the entry when there is one, so it survives a reload.
       if (isValidId(id)) {
@@ -651,7 +684,22 @@ Entry:
 ${text}
 """`;
 
-      const result = await chat(config, { task: 'when', prompt, temperature: 0.1, json: true });
+      const result = await chat(config, {
+        task: 'when',
+        prompt,
+        temperature: 0.1,
+        json: true,
+        validate: (t: string) => {
+            const m = t.match(/\{[\s\S]*\}/);
+            if (!m) return false;
+            try {
+              JSON.parse(m[0]);
+              return true;
+            } catch {
+              return false;
+            }
+          },
+      });
 
       let raw = result.text.trim();
       const fence = raw.match(/\u0060\u0060\u0060(?:json)?\s*([\s\S]*?)\u0060\u0060\u0060/);
