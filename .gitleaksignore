@@ -1,0 +1,4 @@
+# The generic-api-key rule matches across the line break between two EMPTY
+# placeholders in .env.example (GEMINI_API_KEY="" then GROQ_API_KEY=""). There
+# is no value there. Checked 25 Sep 2026.
+6d173376667f990d88b860592fb5367401e65068:.env.example:generic-api-key:67
