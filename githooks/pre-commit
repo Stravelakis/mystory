@@ -1,82 +1,47 @@
 #!/bin/sh
 # =============================================================================
-# PRE-COMMIT — refuse to commit a secret.
+# PRE-COMMIT — blocks secrets and private network addresses.
 #
-# This exists so that keeping keys out of the repository does not depend on
-# anybody remembering. It runs on every commit, including one made by an agent,
-# and a commit that trips it does not happen at all.
+# Turn on once per clone:  git config core.hooksPath githooks
+#                          (npm install does this for you — see "prepare")
+# On macOS/Linux also:     chmod +x githooks/pre-commit
 #
-# Installed by `npm install` (see the "prepare" script), or by hand with:
-#   git config core.hooksPath githooks
+# Two checks, in this order:
 #
-# To get past it deliberately — you are committing an example key, say — use
+#   1. gitleaks — the standard secret scan (repo standards §4). If gitleaks is
+#      not installed the commit is refused rather than waved through, because
+#      a scan that silently did not run is worse than no scan.
+#
+#   2. Private addresses — gitleaks looks for secrets, not for addresses. A
+#      Tailscale or LAN address is not a secret, but it names a machine the
+#      owner runs and does not belong in a public repo (standards §3).
+#
+# To get past it deliberately — a placeholder that looks real — use
 #   git commit --no-verify
-# and know exactly why you are doing it.
+# and know exactly why.
 # =============================================================================
 
-fail() {
-  echo ""
-  echo "  COMMIT BLOCKED — this looks like a secret."
-  echo ""
-  echo "  $1"
-  echo ""
-  echo "  Keys belong in .env, which is ignored by git and never leaves this"
-  echo "  machine. If this is a placeholder and not a real key, commit with"
-  echo "  --no-verify."
-  echo ""
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "pre-commit: gitleaks isn't installed, so this commit can't be checked for secrets." >&2
+  echo "Install it (https://github.com/gitleaks/gitleaks#installing), then commit again." >&2
   exit 1
-}
+fi
 
-staged=$(git diff --cached --name-only --diff-filter=ACM)
-[ -z "$staged" ] && exit 0
+gitleaks git --pre-commit --redact --staged --verbose || exit 1
 
-# --- 1. Files that must never be committed, whatever is in them -------------
-for f in $staged; do
-  case "$f" in
-    .env|.env.*|*/.env|*/.env.*)
-      # .env.example is the documented template and holds no values.
-      case "$f" in
-        *.example) ;;
-        *) fail "$f is an environment file. Those hold real keys." ;;
-      esac
-      ;;
-    *.local.md|*/secrets*|*secrets/*)
-      fail "$f is marked local or secret." ;;
-  esac
-done
+addr=$(git diff --cached -U0 | grep -E '^\+' | grep -v '^+++' \
+  | grep -oE '100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3}|[a-z0-9-]+\.ts\.net' \
+  | grep -vE '^(tailnet-name|your-tailnet|example|<)' \
+  | grep -vE '(tailnet-name|your-tailnet|example)\.ts\.net$' \
+  | head -1)
 
-# --- 2. Key-shaped strings in the staged content ----------------------------
-# Each pattern is a provider's actual key format. Kept narrow on purpose: a
-# guard that cries wolf gets disabled, and a disabled guard protects nothing.
-patterns='
-AIza[0-9A-Za-z_-]{30,}
-sk-[A-Za-z0-9]{24,}
-sk-ant-[A-Za-z0-9_-]{20,}
-sk-or-v1-[A-Za-z0-9]{20,}
-gsk_[A-Za-z0-9]{30,}
-nvapi-[A-Za-z0-9_-]{30,}
-csk-[a-z0-9]{30,}
-xai-[A-Za-z0-9]{30,}
-ghp_[A-Za-z0-9]{30,}
-github_pat_[A-Za-z0-9_]{30,}
-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:fx
-'
-
-for p in $patterns; do
-  [ -z "$p" ] && continue
-  hit=$(git diff --cached -U0 | grep -nE "^\+" | grep -oE "$p" | head -1)
-  if [ -n "$hit" ]; then
-    prefix=$(echo "$hit" | cut -c1-8)
-    fail "A string matching a provider key format is being added: ${prefix}..."
-  fi
-done
-
-# --- 3. Private network addresses -------------------------------------------
-# A Tailscale address is not a secret, but it names a machine the writer owns
-# and does not belong in a public repository.
-tail=$(git diff --cached -U0 | grep -E "^\+" | grep -oE "100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}" | head -1)
-if [ -n "$tail" ]; then
-  fail "A Tailscale address ($tail) is being added. Use a placeholder."
+if [ -n "$addr" ]; then
+  echo "" >&2
+  echo "  COMMIT BLOCKED — a private network address is being added: $addr" >&2
+  echo "  It names a machine you run. Use a placeholder such as" >&2
+  echo "  https://<machine>.<tailnet>.ts.net instead." >&2
+  echo "" >&2
+  exit 1
 fi
 
 exit 0

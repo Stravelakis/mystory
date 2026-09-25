@@ -1,5 +1,24 @@
 # Standards
 
+This repo follows **strav's repo standards** (the shared rules for every
+Stravelakis repo: required files, SemVer and releases, the secret hook, the
+installer, the docs site). They are kept outside this repo. This file adds the
+rules specific to My Story.
+
+**Where this repo differs from the shared standards, and why:**
+
+- **Apache-2.0, not MIT.** Apache-2.0 has a NOTICE file that must travel with
+  any redistribution, so the attribution can't be dropped quietly.
+- **Electron, not Tauri.** The app is a Node server (Express, ffmpeg, the
+  Gemini SDK). Electron runs it in-process, while Tauri would need a sidecar.
+- **The pre-commit hook does more.** After gitleaks, it also refuses private
+  addresses (Tailscale IPs, home-LAN IPs, `*.ts.net` names). A leaked
+  address isn't a secret, but it maps someone's home network.
+- **The docs site lives in `docs/`**, and its deploy workflow is at the repo
+  root (`.github/workflows/deploy-docs.yml`).
+
+---
+
 What "done" means in this project. Short on purpose — a rule nobody reads is
 not a rule.
 

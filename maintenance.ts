@@ -8,7 +8,7 @@
    may replace anything the installer put on disk, and they may not touch
    anything the person wrote. The vault and .env live in the user's data
    folder precisely so that this separation is structural rather than
-   remembered — see electron/main.js.
+   remembered — see electron/main.cjs.
 
    Repair checks the program's own files and reports what is missing.
    Update asks GitHub what the latest release is and compares it to what is
@@ -45,7 +45,15 @@ const REQUIRED = [
   'package.json',
 ];
 
-export async function repair(root = process.cwd()): Promise<RepairReport> {
+/** The app's own folder: the parent of dist/ when running the bundle (inside
+ *  the desktop app that is resources/app.asar, and the working directory is
+ *  somewhere else entirely), the working directory otherwise. */
+function appRoot(): string {
+  if (typeof __dirname !== 'undefined' && path.basename(__dirname) === 'dist') return path.dirname(__dirname);
+  return process.cwd();
+}
+
+export async function repair(root = appRoot()): Promise<RepairReport> {
   const checks: FileCheck[] = [];
 
   for (const rel of REQUIRED) {

@@ -7,6 +7,19 @@ This product includes software developed for the My Story project
 Interface design: Deco Noir, by the same author, vendored into
 src/styles/deco-noir.css rather than depended on.
 
+Third-party work included:
+
+- Poiret One typeface, Copyright 2011 The Poiret One Project Authors. SIL Open Font
+  License 1.1 (public/fonts/OFL.txt). Self-hosted in public/fonts/.
+
+- The docs site (docs/) is built from the Stravelakis docs theme (MIT), which
+  includes the "Dot Field" background from React Bits
+  (https://github.com/DavidHDev/react-bits), Copyright (c) 2026 David Haz,
+  MIT + Commons Clause License Condition v1.0, and the Sora typeface (SIL
+  Open Font License 1.1). See docs/NOTICE.
+
+- Brand art in brand/ was generated locally for this project.
+
 --------------------------------------------------------------------------
 WHAT THIS FILE IS, AND WHY IT MATTERS
 --------------------------------------------------------------------------

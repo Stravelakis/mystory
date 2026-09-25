@@ -1,0 +1,68 @@
+---
+import '@fontsource-variable/sora';
+import '../styles/theme.css';
+import Sidebar from '../components/Sidebar.astro';
+import DotField from '../components/DotField.astro';
+import { siteConfig } from '../../site.config.ts';
+
+interface Props {
+  title: string;
+  description?: string;
+}
+
+const { title, description = siteConfig.description } = Astro.props;
+const vernIds = siteConfig.vernaculars.map((v) => v.id);
+const pageTitle = `${title} · ${siteConfig.projectName}`;
+const canonical = Astro.site ? new URL(Astro.url.pathname, Astro.site).href : undefined;
+---
+<!doctype html>
+<html lang="en" data-vern={vernIds[0]}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{pageTitle}</title>
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#070a1b" />
+    <meta name="color-scheme" content="dark" />
+    {canonical && <link rel="canonical" href={canonical} />}
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={pageTitle} />
+    <meta property="og:description" content={description} />
+    {canonical && <meta property="og:url" content={canonical} />}
+    {siteConfig.faviconHref && <link rel="icon" href={siteConfig.faviconHref} />}
+    <script is:inline define:vars={{ vernIds }}>
+      document.documentElement.classList.add('js');
+      try {
+        var saved = localStorage.getItem('docs-vernacular');
+        if (vernIds.indexOf(saved) !== -1) document.documentElement.dataset.vern = saved;
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <DotField class="page-field" options={siteConfig.backgrounds.page} />
+
+    <div class="layout">
+      <Sidebar />
+      <main class="content" id="main" tabindex="-1">
+        <div class="content-inner">
+          <slot />
+        </div>
+      </main>
+    </div>
+
+    <script>
+      const revealObserver = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            entry.target.classList.add('in-view');
+            revealObserver.unobserve(entry.target);
+          });
+        },
+        { threshold: 0.12 }
+      );
+      document.querySelectorAll('.reveal').forEach((el) => revealObserver.observe(el));
+    </script>
+  </body>
+</html>

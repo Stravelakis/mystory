@@ -136,6 +136,9 @@ ${bodies.join('\n\n')}`;
     stripped.push(id);
     return '';
   });
+  // A bare year in brackets is the model citing the date as if it were a
+  // source ("in 2011 [2011]", 25 Sep 2026). It is not one.
+  text = text.replace(/ ?\[(1[89]|20)[0-9]{2}(-[0-9]{2}){0,2}\]/g, '');
 
   return {
     title: title || 'Untitled chapter',

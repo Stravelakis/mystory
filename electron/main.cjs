@@ -44,6 +44,10 @@ function prepareEnvironment() {
   // Loopback only. The desktop app is for this machine; publishing to the
   // network is a deliberate act, done from DEPLOY.md with HOST set.
   process.env.HOST = process.env.HOST || '127.0.0.1';
+  // Serve the built client. Without this the server starts Vite's dev
+  // middleware, which inside the installed app cannot spawn esbuild and the
+  // window waits forever on a port that never opens.
+  process.env.NODE_ENV = 'production';
 }
 
 /** Starts the bundled server in this process.

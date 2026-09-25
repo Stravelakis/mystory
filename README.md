@@ -1,6 +1,10 @@
 # My Story — a private, self-hosted journal for recording your own life
 
-![My Story](brand/banner.png)
+[![CI](https://github.com/Stravelakis/mystory/actions/workflows/ci.yml/badge.svg)](https://github.com/Stravelakis/mystory/actions/workflows/ci.yml)
+[![Licence: Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-blue)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/Stravelakis/mystory)](https://github.com/Stravelakis/mystory/releases/latest)
+
+![My Story: recording an entry, with the entry list and the English translation beside it](docs/public/screenshots/01-record.png)
 
 **Speak or write. It transcribes, keeps every word in a plain file on your own
 computer, and helps you put your life back in order.**
@@ -27,8 +31,15 @@ of it.
   label it cannot quote for is dropped.
 - **Drafts chapters you can check.** Every claim cites the entry it came from.
 
-Read [GUIDE.md](GUIDE.md) if you have never installed anything before.
-[INSTALL.md](INSTALL.md) is the step-by-step.
+**[Download for Windows](https://github.com/Stravelakis/mystory/releases/latest)** ·
+[Docs site](https://stravelakis.github.io/mystory/) (Dev, English and ELI5) ·
+[GUIDE.md](GUIDE.md) if you have never installed anything before ·
+[INSTALL.md](INSTALL.md) for the step by step.
+
+| | |
+|---|---|
+| ![A Greek entry with its English translation beside it](docs/public/screenshots/02-entry.png) | ![Indicators: a named pattern, its definition, and the quote it was found in](docs/public/screenshots/03-indicators.png) |
+| ![Episodes: entries grouped by time and drafted into a chapter with citations](docs/public/screenshots/04-episodes.png) | ![Which model does which job: a first choice and two fallbacks per job](docs/public/screenshots/06-models.png) |
 
 > **This is a journal, not a clinician.** It names behaviours and dynamics —
 > things that happened, and what they are commonly called. It does not diagnose
@@ -56,7 +67,14 @@ Read [GUIDE.md](GUIDE.md) if you have never installed anything before.
 
 ## Install
 
-**Requirements:** Node.js 20 or newer.
+**Windows:** run `My Story Setup x.y.z.exe` from the
+[latest release](https://github.com/Stravelakis/mystory/releases/latest). It
+installs per user and lists itself in Installed apps. Your entries and settings
+live in `%APPDATA%\mystory` and stay there if you uninstall. There is also a portable
+`.exe`. The installer is not code-signed yet, so SmartScreen will ask:
+choose *More info → Run anyway*.
+
+**From source, anywhere:** Node.js 20 or newer.
 
 ```bash
 git clone https://github.com/Stravelakis/mystory.git
@@ -73,12 +91,15 @@ Or, with Docker:
 touch .env && mkdir -p vault && docker compose up -d
 ```
 
-Either way, do these two things first:
+Either way, do these things first:
 
 1. **Settings → The lock.** Set a passcode. Until you do, anyone who can reach
    the port can read every entry, and the app says so on every screen and in
    the boot log.
-2. **Settings → Models.** Point it at a model. Nothing works until you do —
+2. **Settings → Where your words go.** Tick it only if you want cloud AI.
+   Until it is ticked, no entry is sent to any cloud provider (DeepL
+   included), and only models on your own machine are asked.
+3. **Settings → Models.** Point it at a model. Nothing works until you do —
    though nothing is lost either: recordings are written to disk before any
    model is called.
 
@@ -331,6 +352,12 @@ in.
 | `npm run build` | client into `dist/`, server into `dist/server.cjs` |
 | `npm start` | run the built server |
 | `npm run lint` | `tsc --noEmit` |
+| `npm run desktop` | build, then open the Electron window (`desktop:browser` opens your browser instead) |
+| `npm run build-exe` | the Windows installer and portable `.exe`, into `release/` |
+| `npm run gemini:doctor` | list the Gemini models your key can actually reach |
+
+No test suite yet. CI runs the typecheck, the build and a gitleaks scan of the
+whole history.
 
 ## Look
 

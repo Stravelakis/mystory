@@ -144,7 +144,7 @@ sudo tailscale serve --bg 38726
 ```
 
 `tailscale serve` puts the app behind your tailnet's HTTPS hostname —
-something like `https://minipc.tailnet-name.ts.net`. Open that on the phone
+something like `https://my-server.tailnet-name.ts.net`. Open that on the phone
 and the microphone works.
 
 Then **Share → Add to Home Screen**. It gets its own icon, opens full screen

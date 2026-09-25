@@ -1,0 +1,75 @@
+---
+import DocsLayout from '../layouts/DocsLayout.astro';
+import VernacularPanels from '../components/VernacularPanels.astro';
+import FeatureCards from '../components/FeatureCards.astro';
+import Carousel from '../components/Carousel.astro';
+import Playground from '../components/Playground.astro';
+import { siteConfig } from '../../site.config.ts';
+
+import { Content as Dev } from '../docs/dev.md';
+import { Content as Plain } from '../docs/plain.md';
+import { Content as Eli5 } from '../docs/eli5.md';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const shot = (file: string) => `${base}/screenshots/${file}`;
+
+const features = [
+  { icon: '🔒', title: 'Yours, on your machine', text: 'Entries are plain markdown files in a folder you own. No account, no company, no server but yours.' },
+  { icon: '🎙️', title: 'Speak Greek or English', text: 'Record and it transcribes, word for word or tidied. The original stays beside the English.' },
+  { icon: '🧭', title: 'Put in order', text: 'Each entry carries when it happened, not when you typed it. A rough range is enough.' },
+  { icon: '🏷️', title: 'Names what happened', text: 'Gaslighting, DARVO, scapegoat, fawn, gray rock and more, each with a plain definition and your own sentence as proof.' },
+  { icon: '📖', title: 'Chapters you can check', text: 'Entries grouped into episodes and drafted into chapters. Every sentence cites the entry it came from.' },
+  { icon: '🔌', title: 'Any AI, or none', text: 'Free cloud tiers, your own keys, or models on your own hardware. Local-only is enforced, not preferred.' },
+];
+
+const slides = [
+  { title: 'Record', caption: 'Press Record, or just write. Saved to your own disk as you go.', image: shot('01-record.png') },
+  { title: 'Greek, with English beside it', caption: 'The original is never overwritten. The translation sits next to it.', image: shot('02-entry.png') },
+  { title: 'Indicators', caption: 'A named pattern, what it means, and the exact words it was found in.', image: shot('03-indicators.png') },
+  { title: 'Episodes', caption: 'Entries grouped by when they happened, drafted into a chapter with citations.', image: shot('04-episodes.png') },
+  { title: 'Where your words go', caption: 'Nothing goes to a cloud provider until you tick this box.', image: shot('05-consent.png') },
+  { title: 'Which model does which job', caption: 'A first choice and two fallbacks for every job. The app says which one answered.', image: shot('06-models.png') },
+  { title: 'On your phone', caption: 'Over your own Tailscale network. Installs to the home screen.', image: shot('07-phone.png') },
+];
+---
+<DocsLayout title="Overview">
+  <section class="hero reveal" id="top">
+    <span class="eyebrow">Private journal · Greek &amp; English · self-hosted</span>
+    <h1 class="hero-title">{siteConfig.projectName}</h1>
+    <p class="hero-sub">{siteConfig.description}</p>
+    <p class="hero-sub">
+      <a href={`${siteConfig.repoUrl}/releases/latest`}>Download for Windows</a> ·
+      <a href={`${siteConfig.repoUrl}/blob/main/INSTALL.md`}>Install on anything else</a> ·
+      <a href={siteConfig.repoUrl}>Source</a>
+    </p>
+  </section>
+
+  <FeatureCards features={features} title="What it does" />
+  <Carousel slides={slides} label="Showcase" />
+
+  <section class="doc-body reveal" id="docs" aria-label="Documentation">
+    <VernacularPanels>
+      <Dev slot="dev" />
+      <Plain slot="plain" />
+      <Eli5 slot="eli5" />
+    </VernacularPanels>
+  </section>
+
+  {/* My Story needs a server, a vault and a microphone, so nothing here could
+      honestly run in the page. An annotated walkthrough instead (standards §7). */}
+  <section class="doc-body reveal" id="walkthrough" aria-labelledby="walkthrough-title">
+    <h2 class="section-title" id="walkthrough-title">Walkthrough: your first entry</h2>
+    <ol>
+      <li><b>Install.</b> Run the Windows installer from the latest release, or <code>npm install &amp;&amp; npm run dev</code> anywhere Node 20 runs. It opens at <code>http://localhost:38726</code>.</li>
+      <li><b>Settings → The lock.</b> Set a passcode. Until you do, anyone who can reach the port can read every entry.</li>
+      <li><b>Settings → Where your words go.</b> Leave it unticked to keep everything on this machine (you need a local model for the AI jobs). Tick it to allow cloud providers, knowing your words go to them.</li>
+      <li><b>Settings → Provider keys.</b> Paste a free Google Gemini key (or Groq, Mistral, OpenRouter, or a local endpoint). Press <b>Test</b>, then <b>Load models</b>, then <b>Save all</b>.</li>
+      <li><b>Vault → Record.</b> Speak in Greek or English. Stop, and the words appear. They are already saved.</li>
+      <li><b>When did this happen?</b> Type it in your own words, or press <b>Work it out for me</b>. "The summer before I left school" is a good answer.</li>
+      <li><b>Indicators</b> fill in as you write: each named pattern with its definition and the sentence it came from. A label it cannot quote you for is dropped.</li>
+      <li><b>Synthesis → Find my episodes → Draft this episode.</b> A chapter, where each sentence names the entry it rests on. Copy it into your book or blog.</li>
+    </ol>
+  </section>
+
+  {siteConfig.playground.enabled && <Playground />}
+</DocsLayout>

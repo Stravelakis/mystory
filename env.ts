@@ -29,7 +29,7 @@ export const CONFIG_KEYS = [
   // OpenAI-compatible endpoint works — Ollama, LM Studio, llama.cpp, vLLM —
   // and MODEL_ROUTING decides whether the cloud may be asked at all.
   'MODEL_ROUTING',
-  'TRANSCRIBE_STYLE',
+  'CLOUD_CONSENT',
   'LIVE_TRANSLATE_MODEL',
   'LOCAL_CHAT_BASE_URL',
   'LOCAL_CHAT_MODEL',
