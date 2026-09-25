@@ -55,8 +55,10 @@ Read this first. Everything after it is the permanent reference.
    client, and Repair reports healthy.
 5. ~~Secret scan~~ — **done.** The hook runs gitleaks, then the
    private-address check. CI runs gitleaks over the whole history.
-6. **No test suite.** Say so in any release notes (standards §2). Adding one
-   is the next quality step.
+6. ~~No test suite~~ — **started.** `npm test` (vitest, `tests/`) covers the
+   vault round trip, timeline order, chapter parts, indicator evidence and
+   the routing/consent promises, all without calling a model. It already
+   caught one bug: reads returned a trailing newline. Extend it with every fix.
 7. ~~Image Forge and LocalAI~~ — **settled:** Image Forge is a separate
    project, the owner's workplace, and keeps using LocalAI for images. "No
    LocalAI" applies to My Story only. The gitignored `.mcp.json` here is

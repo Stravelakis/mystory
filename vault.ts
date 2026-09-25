@@ -194,6 +194,10 @@ function parse(id: string, raw: string): Entry {
     english = text.slice(cut + ENGLISH_MARK.length).replace(/\s+$/, '');
     text = text.slice(0, cut);
   }
+  // serialize() trims trailing whitespace and ends the file with a newline;
+  // undo exactly that, or every read hands back text one newline longer than
+  // was saved (caught by tests/vault.test.ts).
+  text = text.replace(/\s+$/, '');
 
   const confidence = ['stated', 'anchored', 'inferred', 'unknown'].includes(meta.when_confidence)
     ? (meta.when_confidence as Occurred['confidence'])

@@ -352,12 +352,15 @@ in.
 | `npm run build` | client into `dist/`, server into `dist/server.cjs` |
 | `npm start` | run the built server |
 | `npm run lint` | `tsc --noEmit` |
+| `npm test` | the test suite, no network needed |
 | `npm run desktop` | build, then open the Electron window (`desktop:browser` opens your browser instead) |
 | `npm run build-exe` | the Windows installer and portable `.exe`, into `release/` |
 | `npm run gemini:doctor` | list the Gemini models your key can actually reach |
 
-No test suite yet. CI runs the typecheck, the build and a gitleaks scan of the
-whole history.
+`npm test` runs the test suite (vitest, `tests/`): the vault round trip,
+timeline order, chapter parts, indicator evidence, and the routing and consent
+promises. None of the tests call a model. CI runs it with the typecheck, the
+build and a gitleaks scan of the whole history.
 
 ## Look
 

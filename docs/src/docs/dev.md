@@ -76,4 +76,4 @@ Every variable is listed in `.env.example`. The desktop app keeps `.env` and the
 
 ### Quality gates
 
-`npm run lint` (tsc) and `npm run build` run in CI on every push and PR. gitleaks runs in the pre-commit hook (`git config core.hooksPath githooks`). **There is no test suite yet.**
+`npm run lint` (tsc), `npm test` (vitest, no network) and `npm run build` run in CI on every push and PR, along with a gitleaks scan of the whole history. gitleaks also runs in the pre-commit hook (`git config core.hooksPath githooks`).
