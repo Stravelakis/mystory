@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 
 ## [Unreleased]
 
+### Added
+- Long chapters are drafted in parts that each fit one model call. Each part is saved to `vault/chapters/` as soon as it finishes. If a part fails, the parts before it are kept, and **Continue** (or **Finish drafting**) picks up at the missing part. Saved chapters are listed in Synthesis → Episodes.
+
 ## [1.0.0] - 2026-09-25
 
 First public release.

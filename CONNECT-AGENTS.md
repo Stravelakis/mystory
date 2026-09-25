@@ -76,6 +76,9 @@ agent adding a translation cannot accidentally blank the dates.
 | `POST /api/journal/transcribe-audio` | multipart `audio` → a transcript |
 | `POST /api/episodes/draft` | `{ids[], focus?, explainTerms?}` → a chapter, every claim cited |
 | `GET /api/episodes/propose` | candidate episodes, grouped by gaps in time |
+| `POST /api/chapters/plan` | `{ids[]}` → the chapter split into parts that fit one model call, with any parts already saved. Calling it again resumes |
+| `POST /api/chapters/:id/parts/:n` | drafts part *n* (1-based) and saves it before answering. Draft the parts in order: each one continues from the last |
+| `GET /api/chapters`, `GET /api/chapters/:id` | saved chapters, and one chapter with its parts and sources |
 
 ### Checking it works
 

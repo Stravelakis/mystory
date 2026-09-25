@@ -38,7 +38,7 @@ export interface EpisodeDraft {
 /** How an entry is shown to the drafting model: its id, when it happened, what
  *  was named in it and why. The evidence quotes go in because a chapter that
  *  explains a term should quote the moment it came from, not paraphrase it. */
-async function render(entry: Entry): Promise<string> {
+export async function render(entry: Entry): Promise<string> {
   const terms = await loadTerms();
   const byId = new Map(terms.map(t => [t.id, t]));
 
@@ -73,6 +73,15 @@ export interface DraftOptions {
   explainTerms?: boolean;
   model?: string;
   providerId?: string;
+  /** Set when this draft is one part of a longer chapter (chapters.ts). */
+  part?: {
+    index: number; // 0-based
+    total: number;
+    /** The chapter title, once part 1 has named it. */
+    title?: string;
+    /** The end of the previous part, so this one picks up rather than restarts. */
+    previousTail?: string;
+  };
 }
 
 export async function draftEpisode(
@@ -86,10 +95,19 @@ export async function draftEpisode(
   const bodies = await Promise.all(ordered.map(render));
   const ids = ordered.map(e => e.id);
 
+  const part = opts.part && opts.part.total > 1 ? opts.part : undefined;
+  const partNote = !part
+    ? 'Write ONE chapter covering the entries below, in the order they happened.'
+    : part.index === 0
+      ? `This chapter is too long for one go, so it is being written in ${part.total} parts. Write PART 1: cover only the entries below, in the order they happened, and stop at a natural pause. Do not wrap the chapter up; more follows.`
+      : `This chapter is being written in ${part.total} parts. Write PART ${part.index + 1}${part.title ? ` of the chapter "${part.title}"` : ''}: cover only the entries below, in the order they happened. Carry straight on from where the previous part ended; do not recap it, reintroduce anyone or restart the story.${
+          part.index === part.total - 1 ? ' This is the last part: bring the chapter to a close.' : ' More follows, so do not wrap up.'
+        }${part.previousTail ? `\n\nThe previous part ended:\n"""\n${part.previousTail}\n"""` : ''}`;
+
   const prompt = `You are helping someone turn their own journal entries into one chapter of their life story. They have spotty memory and are using this to see what happened, in order, in their own words.
 
 ${opts.focus ? `This chapter is about: ${opts.focus}\n` : ''}
-Write ONE chapter covering the entries below, in the order they happened.
+${partNote}
 
 Rules, all of them load-bearing:
 
@@ -104,8 +122,7 @@ ${
     : `6. Do not lecture about the named patterns. Tell what happened.`
 }
 
-Begin with a title on the first line, as: TITLE: <a few words>
-Then the chapter.
+${part && part.index > 0 ? 'Do not write a title. Start directly with the text.' : 'Begin with a title on the first line, as: TITLE: <a few words>\nThen the chapter.'}
 
 Entries, in order:
 
