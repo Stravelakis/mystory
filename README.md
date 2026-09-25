@@ -32,7 +32,7 @@ of it.
 - **Drafts chapters you can check.** Every claim cites the entry it came from.
 
 **[Download for Windows](https://github.com/Stravelakis/mystory/releases/latest)** ·
-[Docs site](https://stravelakis.github.io/mystory/) (Dev, English and ELI5) ·
+[Docs site](https://docs.stravelakis.com/mystory/) (Dev, English and ELI5) ·
 [GUIDE.md](GUIDE.md) if you have never installed anything before ·
 [INSTALL.md](INSTALL.md) for the step by step.
 

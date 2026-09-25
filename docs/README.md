@@ -1,6 +1,6 @@
 # My Story — docs site
 
-The site at https://stravelakis.github.io/mystory/, built from the Stravelakis
+The site at https://docs.stravelakis.com/mystory/, built from the Stravelakis
 docs theme (see `NOTICE` and `LICENSE` in this folder).
 
 - `site.config.ts`: name, links, menu
