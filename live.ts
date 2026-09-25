@@ -152,6 +152,17 @@ async function streamAudio(session: any, pcm: Buffer) {
     });
     await new Promise(r => setTimeout(r, 15));
   }
+  // Two seconds of silence before the end marker. The interpreter translates
+  // a sentence when its voice detection hears the sentence finish; a recording
+  // that stops dead gives it no pause to hear, and on 25 Sep 2026 the last
+  // sentence of a two-sentence test was simply never translated.
+  const silence = Buffer.alloc(16000 * 2 * 2);
+  for (let i = 0; i < silence.length; i += chunk) {
+    session.sendRealtimeInput({
+      audio: { data: silence.subarray(i, i + chunk).toString('base64'), mimeType: 'audio/pcm;rate=16000' },
+    });
+    await new Promise(r => setTimeout(r, 15));
+  }
   session.sendRealtimeInput({ audioStreamEnd: true });
 }
 
@@ -222,7 +233,7 @@ export async function liveTranslateSpeech(apiKey: string, model: string, audio: 
   const result = new Promise<string>((resolve, reject) => {
     const bump = () => {
       clearTimeout(idle);
-      idle = setTimeout(() => resolve(said), sentAll ? 4000 : 15000);
+      idle = setTimeout(() => resolve(said), sentAll ? 9000 : 20000);
     };
     ai.live
       .connect({

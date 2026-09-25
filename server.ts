@@ -621,6 +621,18 @@ async function startServer() {
         if (recording) {
           try {
             const english = await liveTranslateSpeech(geminiKey, liveModel, await fs.readFile(recording));
+
+            // An interpreter that stops early does not say so — it just hands
+            // back part of the entry. English runs about as long as Greek, so
+            // an answer under half the length of what was said is treated as
+            // cut off, and the text path takes over. A silently shortened
+            // translation of someone's testimony is worse than none.
+            const ratio = english.length / Math.max(1, text.length);
+            if (ratio < 0.5) {
+              throw new Error(
+                `Live Translate returned ${english.length} characters for ${text.length} spoken — looks cut off.`,
+              );
+            }
             result = { text: english, engine: 'gemini-live', rewritten: true };
           } catch (err: any) {
             console.warn('Live Translate failed, falling back to text translation:', err?.message || err);
