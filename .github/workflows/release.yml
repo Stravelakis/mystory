@@ -22,7 +22,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run build-exe
+      # --publish never: on a tag, electron-builder otherwise tries to upload
+      # by itself, without a token, and fails. The step below uploads.
+      - run: npm run build-exe -- --publish never
         env:
           # No code-signing certificate; do not let electron-builder go looking.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
