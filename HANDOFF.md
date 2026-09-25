@@ -1,8 +1,77 @@
 # ⚒ My Story — Engineering Handoff
 
-Everything a fresh session needs. Written 3 Sep 2026.
+Everything a fresh session needs. Updated 25 Sep 2026.
 
 ---
+
+## 0. Where things stand — 25 Sep 2026
+
+Read this first. Everything after it is the permanent reference.
+
+### Running
+
+- **Live install:** the owner's mini PC, reached at
+  `https://<machine>.<tailnet>.ts.net:38726` over Tailscale, tailnet only.
+  Deploy steps and paths are at the top of [DEPLOY.md](DEPLOY.md).
+- **Not on the laptop any more.** The laptop keeps only this git checkout for
+  development, plus a Desktop shortcut to the server. No local server, no
+  `.env`, no `node_modules` there — run `npm install` before building
+  locally, and put a `.env` back only for testing.
+- **Deploy = SSH + git pull + build + restart.** Never copy files across.
+
+### The owner's decisions (do not relitigate)
+
+| Decision | Consequence |
+|---|---|
+| Everyday work on Gemini **Live** models | text jobs: `gemini-live::gemini-3.8-live-extended-thinking`; transcription: `gemini-live::gemini-3.5-transcribe-live` |
+| Fallbacks | `gemini::gemini-3.5-flash-lite`, then `gemini::gemma-4-31b-it` (transcription falls to `gemini-3.5-transcribe`, then Groq Whisper) |
+| Free-tier privacy terms | **accepted** by the owner; do not keep raising it |
+| **No LocalAI**, no local model | the server has no `LOCAL_CHAT_*`; do not re-add one |
+| **No Live Translate** | off unless `LIVE_TRANSLATE_MODEL` is set; translation goes straight to **DeepL** |
+| Tidied transcription by default | verbatim is always kept on disk beside it |
+| Port **38726** | picked with the repo-standards tool, recorded in its PORTS.md |
+| Electron, not Tauri | the app is a Node server; Tauri would need it as a sidecar |
+
+### Next, in order
+
+1. **Chapters drafted in parts.** The owner's idea. A chapter over many
+   entries can exceed one minute of the Live allowance (65k tokens/min, and
+   each Live call already spends ~2,600 on Google's preamble). Today that
+   quietly falls back to Flash Lite. Wanted instead: split the selected
+   entries into batches that fit the budget, draft and **save each part as it
+   finishes**, then continue — so nothing is lost and it stays on Live.
+   `episodes.ts:draftEpisode` is where it goes; a part is just a draft over a
+   subset of ids, so the existing citation check applies unchanged.
+   Talking is NOT the bottleneck: audio is roughly 32 tokens per second, so
+   even non-stop speech uses about a tenth of the 20k/min transcription
+   allowance. No need to slow the speaker down.
+2. **Passcode not set on the server.** Every tailnet device can open it.
+   The owner sets it: Settings → The lock.
+3. **Reboot survival not proven.** The service is enabled and linger is on,
+   but the machine has not been rebooted since.
+4. **Windows installer never built.** `npm run build-exe` is configured
+   (electron-builder, NSIS + portable, keeps user data on uninstall) but has
+   not been run.
+5. **Secret scan:** the standards want the pre-commit hook to run
+   `gitleaks`. `githooks/pre-commit` is hand-rolled regex. Swap it.
+6. **No test suite.** Say so in any release notes (standards §2).
+7. **Image Forge** (`.mcp.json`, gitignored) points at the laptop's LocalAI
+   for images. That was the only engine that got the art right. Check with the
+   owner whether "no LocalAI" covers image generation too.
+
+### Things that will bite
+
+- `dotenv` now reads `ENV_PATH` (honours `MYSTORY_ENV_PATH`). Server settings
+  live in `~/.config/mystory/.env`, not the checkout.
+- Shell heredocs mangle backticks and `$` in this environment. Write patch
+  scripts to a file, then run them.
+- `npm ci` needs `ELECTRON_SKIP_BINARY_DOWNLOAD=1` on any server.
+- Translation: "μου είπε" has no gender in Greek; English forces one, and
+  DeepL picks "he". That is the gender of **the person speaking to the
+  owner**, and can be wrong.
+
+---
+
 
 ## 1. Orientation (60 seconds)
 
