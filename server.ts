@@ -63,6 +63,7 @@ import {
   loadConfig,
   saveConfig,
   setEnvKey,
+  ENV_PATH,
 } from './env.ts';
 import * as google from './google.ts';
 import { NotConnected } from './google.ts';
@@ -87,7 +88,11 @@ import { draftEpisode, proposeEpisodes } from './episodes.ts';
 import { repair, checkUpdate } from './maintenance.ts';
 import { timelineKey } from './vault.ts';
 
-dotenv.config();
+// From the same file the settings screen writes to. Plain dotenv.config() read
+// ./.env in the working folder, so when the desktop app or a server install
+// moved settings out of the program folder (MYSTORY_ENV_PATH), HOST and PORT
+// in that file were silently ignored.
+dotenv.config({ path: ENV_PATH });
 
 // 38726, not 3000. Port 3000 is the busiest number in local development —
 // Image Forge's dev server sits on it with strictPort, so whichever of the two
