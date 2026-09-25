@@ -86,8 +86,9 @@ import {
 import { buildPrompt, normalise, loadTerms, CATEGORIES } from './vocabulary.ts';
 import { translate } from './translate.ts';
 import { liveTranslateSpeech } from './live.ts';
-import { draftEpisode, proposeEpisodes } from './episodes.ts';
+import { draftEpisode, proposeEpisodes, render as renderForEpisode } from './episodes.ts';
 import { repair, checkUpdate } from './maintenance.ts';
+import { planParts, openChapter, readChapter, savePart, listChapters, isChapterId } from './chapters.ts';
 import { timelineKey } from './vault.ts';
 
 // From the same file the settings screen writes to. Plain dotenv.config() read
@@ -592,6 +593,103 @@ async function startServer() {
       console.error('Episode draft failed:', e);
       res.status(500).json({ success: false, error: e.message || String(e) });
     }
+  });
+
+  /* --- Chapters in parts (chapters.ts) -------------------------------------
+     The client asks for a plan, then drafts the parts one request at a time,
+     so each part is on disk before the next is asked for and the screen can
+     show it as it lands. Asking for the plan again resumes: parts already
+     drafted come back with it. */
+
+  async function readInTimeOrder(ids: string[]) {
+    const loaded = [];
+    for (const id of ids) {
+      try {
+        loaded.push(await readEntry(id));
+      } catch {
+        console.warn(`Chapter skipped unreadable entry ${id}`);
+      }
+    }
+    return loaded.sort((a, b) => timelineKey(a) - timelineKey(b));
+  }
+
+  app.post('/api/chapters/plan', async (req, res) => {
+    const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.filter(isValidId) : [];
+    if (ids.length === 0) return res.status(400).json({ success: false, error: 'Choose at least one entry.' });
+    try {
+      const entries = await readInTimeOrder(ids);
+      if (entries.length === 0) return res.status(400).json({ success: false, error: 'None of those entries could be read.' });
+      const rendered = await Promise.all(entries.map(renderForEpisode));
+      const ordered = entries.map(e => e.id);
+      const chapter = await openChapter(ordered, planParts(ordered, rendered));
+      res.json({
+        success: true,
+        chapter,
+        sources: entries.map(e => ({ id: e.id, title: e.title, when: e.occurred?.text || e.occurred?.start || '' })),
+      });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message || String(e) });
+    }
+  });
+
+  app.post('/api/chapters/:id/parts/:n', async (req, res) => {
+    const index = Number(req.params.n) - 1;
+    try {
+      const chapter = await readChapter(req.params.id);
+      if (!chapter) return res.status(404).json({ success: false, error: 'That chapter is not in the vault.' });
+      if (!Number.isInteger(index) || index < 0 || index >= chapter.plan.length) {
+        return res.status(400).json({ success: false, error: 'That chapter has no such part.' });
+      }
+
+      const config = await loadConfig();
+      const entries = await readInTimeOrder(chapter.plan[index]);
+      const raw = String(req.body?.model || '');
+      const [pickedProvider, pickedModel] = raw.includes('::') ? raw.split('::') : ['', raw];
+      const previous = index > 0 ? chapter.parts[index - 1] : '';
+
+      const draft = await draftEpisode(config, entries, {
+        explainTerms: req.body?.explainTerms !== false,
+        ...(pickedModel ? { model: pickedModel } : {}),
+        ...(pickedProvider ? { providerId: pickedProvider } : {}),
+        part: {
+          index,
+          total: chapter.plan.length,
+          title: chapter.title || undefined,
+          previousTail: previous ? previous.slice(-800) : undefined,
+        },
+      });
+
+      const saved = await savePart(chapter.id, index, draft.text, index === 0 ? draft.title : undefined);
+      res.json({
+        success: true,
+        part: index + 1,
+        total: saved.plan.length,
+        title: saved.title,
+        text: draft.text,
+        provider: draft.provider,
+        model: draft.model,
+        strippedCitations: draft.strippedCitations,
+      });
+    } catch (e: any) {
+      console.error('Chapter part failed:', e);
+      res.status(500).json({ success: false, error: e.message || String(e) });
+    }
+  });
+
+  app.get('/api/chapters', async (_req, res) => {
+    res.json({ success: true, chapters: await listChapters() });
+  });
+
+  app.get('/api/chapters/:id', async (req, res) => {
+    if (!isChapterId(req.params.id)) return res.status(400).json({ success: false, error: 'Not a chapter id.' });
+    const chapter = await readChapter(req.params.id);
+    if (!chapter) return res.status(404).json({ success: false, error: 'That chapter is not in the vault.' });
+    const entries = await readInTimeOrder(chapter.entries);
+    res.json({
+      success: true,
+      chapter,
+      sources: entries.map(e => ({ id: e.id, title: e.title, when: e.occurred?.text || e.occurred?.start || '' })),
+    });
   });
 
   /** Greek in, English beside it.

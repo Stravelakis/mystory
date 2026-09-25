@@ -34,6 +34,7 @@ src/App.tsx  ──fetch /api──►  server.ts  (routes only)
 | `vocabulary.ts` | the terms, the tagging prompt, and `normalise()`, which drops any label whose quote is not in the entry |
 | `vault.ts` | entries, audio, `.trash/`, timeline order by *when it happened* |
 | `episodes.ts` | groups dated entries by gap, drafts chapters, strips invented citations |
+| `chapters.ts` | long chapters in parts: splits by an estimated token budget (`EPISODE_PART_TOKENS`, default 12000), saves each part to `vault/chapters/` as it lands, resumes from the first missing part |
 | `env.ts` / `auth.ts` | `.env` allow-list and writes; scrypt passcode and signed sessions |
 | `maintenance.ts` | Settings → Advanced: Repair and Update (GitHub Releases API, SemVer) |
 

@@ -1827,13 +1827,25 @@ interface ProposedEpisode {
   ids: string[];
   titles: string[];
 }
-interface EpisodeDraft {
+/** A chapter drafted in parts (chapters.ts). Each part is saved on the
+ *  server before the next is asked for, so this can be rebuilt at any time
+ *  from /api/chapters/:id. */
+interface ChapterDraft {
+  id: string;
   title: string;
-  text: string;
+  parts: string[];
   sources: { id: string; title: string; when: string }[];
   provider: string;
   model: string;
-  strippedCitations: string[];
+  stripped: number;
+}
+interface SavedChapter {
+  id: string;
+  title: string;
+  entries: string[];
+  plan: string[][];
+  done: number;
+  updated: string;
 }
 
 function EpisodesPanel() {
@@ -1841,7 +1853,20 @@ function EpisodesPanel() {
   const [undated, setUndated] = useState<{ id: string; title: string }[]>([]);
   const [finding, setFinding] = useState(false);
   const [drafting, setDrafting] = useState<number | null>(null);
-  const [draft, setDraft] = useState<EpisodeDraft | null>(null);
+  const [draft, setDraft] = useState<ChapterDraft | null>(null);
+  const [progress, setProgress] = useState<string | null>(null);
+  const [lastIds, setLastIds] = useState<string[] | null>(null);
+  const [saved, setSaved] = useState<SavedChapter[]>([]);
+
+  const loadSaved = async () => {
+    try {
+      const d = await (await fetch('/api/chapters')).json();
+      if (d.success) setSaved(d.chapters);
+    } catch {}
+  };
+  useEffect(() => {
+    void loadSaved();
+  }, []);
   const [explain, setExplain] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -1860,31 +1885,93 @@ function EpisodesPanel() {
     }
   };
 
-  const draftOne = async (i: number) => {
-    if (!episodes) return;
-    setDrafting(i);
+  const post = async (url: string, body: unknown) =>
+    (
+      await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    ).json();
+
+  /** Plans the chapter, then drafts every part not yet on disk, one at a
+   *  time. Running it again after a failure resumes at the missing part. */
+  const draftIds = async (ids: string[], slot: number | null) => {
+    setDrafting(slot ?? -1);
     setError(null);
-    setDraft(null);
+    setLastIds(ids);
     try {
-      const d = await (
-        await fetch('/api/episodes/draft', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ids: episodes[i].ids, explainTerms: explain }),
-        })
-      ).json();
-      if (!d.success) throw new Error(d.error || 'The draft failed.');
-      setDraft(d);
+      const plan = await post('/api/chapters/plan', { ids });
+      if (!plan.success) throw new Error(plan.error || 'Could not plan the chapter.');
+      const ch = plan.chapter;
+      const total = ch.plan.length;
+      let current: ChapterDraft = {
+        id: ch.id,
+        title: ch.title,
+        parts: [...ch.parts],
+        sources: plan.sources,
+        provider: '',
+        model: '',
+        stripped: 0,
+      };
+      setDraft(current);
+
+      for (let n = 0; n < total; n++) {
+        if (current.parts[n]) continue;
+        setProgress(total > 1 ? `Drafting part ${n + 1} of ${total}…` : 'Drafting…');
+        const d = await post(`/api/chapters/${ch.id}/parts/${n + 1}`, { explainTerms: explain });
+        if (!d.success) {
+          throw new Error(
+            (total > 1 ? `Part ${n + 1} of ${total} failed; the parts before it are saved. ` : '') +
+              (d.error || 'The draft failed.'),
+          );
+        }
+        current = {
+          ...current,
+          title: d.title || current.title,
+          parts: current.parts.map((t, i) => (i === n ? d.text : t)),
+          provider: d.provider,
+          model: d.model,
+          stripped: current.stripped + (d.strippedCitations?.length || 0),
+        };
+        setDraft(current);
+      }
+      setProgress(null);
+      void loadSaved();
     } catch (e: any) {
       setError(e.message || String(e));
+      setProgress(null);
     } finally {
       setDrafting(null);
     }
   };
 
+  const draftOne = (i: number) => (episodes ? draftIds(episodes[i].ids, i) : undefined);
+
+  /** Shows a saved chapter as it is on disk, parts and all. */
+  const openSaved = async (c: SavedChapter) => {
+    setError(null);
+    try {
+      const d = await (await fetch(`/api/chapters/${c.id}`)).json();
+      if (!d.success) throw new Error(d.error);
+      setLastIds(d.chapter.entries);
+      setDraft({
+        id: d.chapter.id,
+        title: d.chapter.title,
+        parts: d.chapter.parts,
+        sources: d.sources || [],
+        provider: '',
+        model: '',
+        stripped: 0,
+      });
+    } catch (e: any) {
+      setError(e.message || String(e));
+    }
+  };
+
   // Citations arrive as [20260816-142530-a3f]. Shown as the entry's title so a
   // reader can see which of their own entries a sentence rests on.
-  const renderWithCitations = (text: string, sources: EpisodeDraft['sources']) => {
+  const renderWithCitations = (text: string, sources: ChapterDraft['sources']) => {
     const byId = new Map(sources.map(x => [x.id, x]));
     const parts = text.split(/(\[[0-9]{8}-[0-9]{6}-[a-z0-9]{4}\])/g);
     return parts.map((part, i) => {
@@ -1923,7 +2010,46 @@ function EpisodesPanel() {
       {error && (
         <div className="callout warn">
           <span className="cd" />
-          <span>{error}</span>
+          <span>
+            {error}
+            {lastIds && drafting === null && (
+              <button className="btn btn-sm cut-sm" style={{ marginLeft: 12 }} onClick={() => void draftIds(lastIds, null)}>
+                Continue
+              </button>
+            )}
+          </span>
+        </div>
+      )}
+
+      {progress && (
+        <p className="fhint flex items-center gap-2">
+          <RefreshCw className="w-3 h-3 animate-spin" /> {progress} Each part is saved as soon as it is done.
+        </p>
+      )}
+
+      {saved.length > 0 && (
+        <div style={{ marginBottom: 'var(--gap)' }}>
+          <p className="k" style={{ margin: '0 0 6px' }}>Saved chapters</p>
+          <div className="flex flex-col gap-2">
+            {saved.map(c => (
+              <div key={c.id} className="flex items-center justify-between gap-3 flex-wrap">
+                <span className="fhint" style={{ margin: 0 }}>
+                  {c.title || 'Untitled chapter'} · {c.entries.length} entr{c.entries.length === 1 ? 'y' : 'ies'}
+                  {c.plan.length > 1 ? ` · ${c.done} of ${c.plan.length} parts` : c.done ? '' : ' · not drafted'}
+                </span>
+                <span className="flex gap-2">
+                  <button className="btn btn-sm cut-sm" disabled={drafting !== null} onClick={() => void openSaved(c)}>
+                    Open
+                  </button>
+                  {c.done < c.plan.length && (
+                    <button className="btn btn-sm cut-sm" disabled={drafting !== null} onClick={() => void draftIds(c.entries, null)}>
+                      Finish drafting
+                    </button>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -1970,19 +2096,26 @@ function EpisodesPanel() {
 
       {draft && (
         <div style={{ marginTop: 'var(--gap)' }}>
-          <h3 style={{ margin: '0 0 6px' }}>{draft.title}</h3>
+          <h3 style={{ margin: '0 0 6px' }}>{draft.title || 'Untitled chapter'}</h3>
           <p className="fhint" style={{ margin: '0 0 var(--gap)' }}>
-            Drafted by {draft.provider} · {draft.model}
-            {draft.strippedCitations.length > 0 &&
-              ` — ${draft.strippedCitations.length} made-up citation${draft.strippedCitations.length === 1 ? ' was' : 's were'} removed`}
+            {draft.parts.length > 1 && `${draft.parts.filter(Boolean).length} of ${draft.parts.length} parts · `}
+            {draft.model ? `Drafted by ${draft.provider} · ${draft.model}` : 'Saved in the vault'}
+            {draft.stripped > 0 &&
+              ` — ${draft.stripped} made-up citation${draft.stripped === 1 ? ' was' : 's were'} removed`}
           </p>
-          <div className="prose" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
-            {renderWithCitations(draft.text, draft.sources)}
-          </div>
+          {draft.parts.map((text, i) =>
+            text ? (
+              <div key={i} className="prose" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.7, marginBottom: 'var(--gap)' }}>
+                {renderWithCitations(text, draft.sources)}
+              </div>
+            ) : null,
+          )}
           <button
             className="btn btn-sm cut-sm"
-            style={{ marginTop: 'var(--gap)' }}
-            onClick={() => void navigator.clipboard?.writeText(`${draft.title}\n\n${draft.text}`)}
+            disabled={draft.parts.some(t => !t)}
+            onClick={() =>
+              void navigator.clipboard?.writeText(`${draft.title}\n\n${draft.parts.join('\n\n')}`)
+            }
           >
             Copy the chapter
           </button>

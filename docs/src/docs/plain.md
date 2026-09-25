@@ -8,7 +8,7 @@ My Story is a journal that lives on your own computer. You talk or type, and it 
 - **Translates, without replacing.** Greek entries get an English version beside them. The original is never changed.
 - **Puts things in order.** You can say when something happened in your own words ("the year my brother left"). It works out a rough date range, so entries line up in the order they happened, not the order you wrote them.
 - **Names what happened.** As you write, it spots patterns such as gaslighting, DARVO, scapegoating or the golden child, and responses such as fawning or gray rock. Each one comes with a short explanation and the exact sentence of yours it was found in. If it can't point to your words, it doesn't show the label.
-- **Helps you write the book.** It groups entries into episodes by time and drafts each one as a chapter. Every sentence is marked with the entry it came from, so you can check it.
+- **Helps you write the book.** It groups entries into episodes by time and drafts each one as a chapter. Every sentence is marked with the entry it came from, so you can check it. A long chapter is written in parts and each part is saved as soon as it's done, so if something fails you only lose the part it was working on.
 
 ### Where your words go
 

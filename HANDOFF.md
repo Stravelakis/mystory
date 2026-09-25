@@ -34,7 +34,7 @@ Read this first. Everything after it is the permanent reference.
 
 ### Next, in order
 
-1. **Chapters drafted in parts.** The owner's idea. A chapter over many
+1. ~~Chapters drafted in parts~~ — **done** (`chapters.ts`, routes `/api/chapters/*`). What follows is the original brief. The owner's idea. A chapter over many
    entries can exceed one minute of the Live allowance (65k tokens/min, and
    each Live call already spends ~2,600 on Google's preamble). Today that
    quietly falls back to Flash Lite. Wanted instead: split the selected
