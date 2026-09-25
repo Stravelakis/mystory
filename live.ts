@@ -48,7 +48,19 @@ function explainClose(code: number, reason: string): string {
    Text jobs: the model speaks, and its speech comes back transcribed.
    -------------------------------------------------------------------------- */
 
+/** A Live session now and then ends its turn having said nothing (seen on
+ *  gemini-3.8-live-extended-thinking, 25 Sep 2026: the same prompt answered
+ *  fine on the next try). One more attempt before the router moves on. */
 export async function liveChat(apiKey: string, model: string, prompt: string): Promise<string> {
+  try {
+    return await liveChatOnce(apiKey, model, prompt);
+  } catch (e) {
+    if (e instanceof LiveError && /answered with nothing/.test(e.message)) return liveChatOnce(apiKey, model, prompt);
+    throw e;
+  }
+}
+
+async function liveChatOnce(apiKey: string, model: string, prompt: string): Promise<string> {
   const ai = new GoogleGenAI({ apiKey });
   let text = '';
   let session: any;

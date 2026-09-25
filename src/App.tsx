@@ -1813,6 +1813,182 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
    SYNTHESIS
    ========================================================================== */
 
+/* =============================================================================
+   EPISODES — the book view. Entries grouped by when things happened, each
+   group drafted into a chapter whose every claim cites the entry it came from.
+   ========================================================================== */
+
+interface ProposedEpisode {
+  from: string;
+  to: string;
+  ids: string[];
+  titles: string[];
+}
+interface EpisodeDraft {
+  title: string;
+  text: string;
+  sources: { id: string; title: string; when: string }[];
+  provider: string;
+  model: string;
+  strippedCitations: string[];
+}
+
+function EpisodesPanel() {
+  const [episodes, setEpisodes] = useState<ProposedEpisode[] | null>(null);
+  const [undated, setUndated] = useState<{ id: string; title: string }[]>([]);
+  const [finding, setFinding] = useState(false);
+  const [drafting, setDrafting] = useState<number | null>(null);
+  const [draft, setDraft] = useState<EpisodeDraft | null>(null);
+  const [explain, setExplain] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const find = async () => {
+    setFinding(true);
+    setError(null);
+    try {
+      const d = await (await fetch('/api/episodes/propose')).json();
+      if (!d.success) throw new Error(d.error || 'Could not group the entries.');
+      setEpisodes(d.episodes);
+      setUndated(d.undated || []);
+    } catch (e: any) {
+      setError(e.message || String(e));
+    } finally {
+      setFinding(false);
+    }
+  };
+
+  const draftOne = async (i: number) => {
+    if (!episodes) return;
+    setDrafting(i);
+    setError(null);
+    setDraft(null);
+    try {
+      const d = await (
+        await fetch('/api/episodes/draft', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: episodes[i].ids, explainTerms: explain }),
+        })
+      ).json();
+      if (!d.success) throw new Error(d.error || 'The draft failed.');
+      setDraft(d);
+    } catch (e: any) {
+      setError(e.message || String(e));
+    } finally {
+      setDrafting(null);
+    }
+  };
+
+  // Citations arrive as [20260816-142530-a3f]. Shown as the entry's title so a
+  // reader can see which of their own entries a sentence rests on.
+  const renderWithCitations = (text: string, sources: EpisodeDraft['sources']) => {
+    const byId = new Map(sources.map(x => [x.id, x]));
+    const parts = text.split(/(\[[0-9]{8}-[0-9]{6}-[a-z0-9]{4}\])/g);
+    return parts.map((part, i) => {
+      const m = part.match(/^\[([0-9]{8}-[0-9]{6}-[a-z0-9]{4})\]$/);
+      if (!m) return <span key={i}>{part}</span>;
+      const src = byId.get(m[1]);
+      return (
+        <sup key={i} className="tag" style={{ fontSize: '0.7em', margin: '0 2px', verticalAlign: 'super' }} title={src?.when || ''}>
+          {src?.title || m[1]}
+        </sup>
+      );
+    });
+  };
+
+  return (
+    <Frame title="Episodes" className="mb-6" lit={!!draft}>
+      <p className="sec-note">
+        Your entries grouped by <b>when things happened</b>, and each group drafted into
+        a chapter. Every sentence is marked with the entry it came from, so nothing in a
+        chapter is something you did not write.
+      </p>
+
+      <div className="flex items-center gap-3 flex-wrap" style={{ marginBottom: 'var(--gap)' }}>
+        <button className="btn btn-primary cut-sm" disabled={finding} onClick={() => void find()}>
+          <span className="flex items-center gap-2">
+            {finding ? <RefreshCw className="w-4 h-4 animate-spin" /> : <BookOpen className="w-4 h-4" />}
+            {finding ? 'Grouping…' : episodes ? 'Group again' : 'Find my episodes'}
+          </span>
+        </button>
+        <label className="flex items-center gap-2 fhint" style={{ margin: 0, cursor: 'pointer' }}>
+          <input type="checkbox" checked={explain} onChange={e => setExplain(e.target.checked)} />
+          Explain the named patterns as they come up
+        </label>
+      </div>
+
+      {error && (
+        <div className="callout warn">
+          <span className="cd" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {episodes && episodes.length === 0 && (
+        <div className="empty w-full">
+          <span className="emptymark cut" />
+          <span className="fhint">
+            Nothing is placed in time yet. Open an entry and use "When did this happen?" —
+            episodes are built from entries that have a when.
+          </span>
+        </div>
+      )}
+
+      {episodes && episodes.length > 0 && (
+        <div className="flex flex-col gap-3">
+          {episodes.map((ep, i) => (
+            <div key={i} className="tile" style={{ padding: '0.8rem 1rem' }}>
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <p className="k" style={{ margin: 0 }}>
+                    {ep.from === ep.to || !ep.to ? ep.from : `${ep.from} → ${ep.to}`}
+                  </p>
+                  <p className="fhint" style={{ margin: '4px 0 0' }}>
+                    {ep.titles.join(' · ')}
+                  </p>
+                </div>
+                <button className="btn btn-sm cut-sm" disabled={drafting !== null} onClick={() => void draftOne(i)}>
+                  <span className="flex items-center gap-2">
+                    {drafting === i ? <RefreshCw className="w-3 h-3 animate-spin" /> : null}
+                    {drafting === i ? 'Drafting…' : `Draft this episode (${ep.ids.length})`}
+                  </span>
+                </button>
+              </div>
+            </div>
+          ))}
+          {undated.length > 0 && (
+            <p className="fhint">
+              {undated.length} entr{undated.length === 1 ? 'y is' : 'ies are'} not placed in time yet
+              and are left out: {undated.map(u => u.title).join(', ')}.
+            </p>
+          )}
+        </div>
+      )}
+
+      {draft && (
+        <div style={{ marginTop: 'var(--gap)' }}>
+          <h3 style={{ margin: '0 0 6px' }}>{draft.title}</h3>
+          <p className="fhint" style={{ margin: '0 0 var(--gap)' }}>
+            Drafted by {draft.provider} · {draft.model}
+            {draft.strippedCitations.length > 0 &&
+              ` — ${draft.strippedCitations.length} made-up citation${draft.strippedCitations.length === 1 ? ' was' : 's were'} removed`}
+          </p>
+          <div className="prose" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
+            {renderWithCitations(draft.text, draft.sources)}
+          </div>
+          <button
+            className="btn btn-sm cut-sm"
+            style={{ marginTop: 'var(--gap)' }}
+            onClick={() => void navigator.clipboard?.writeText(`${draft.title}\n\n${draft.text}`)}
+          >
+            Copy the chapter
+          </button>
+        </div>
+      )}
+    </Frame>
+  );
+}
+
 function SynthesisStudio({ google }: { key?: string; google: GoogleStatus }) {
   const [providers] = useProviders();
   const modelGroups: PickerGroup[] = providers.synthesis.map(g => ({
@@ -1897,6 +2073,8 @@ function SynthesisStudio({ google }: { key?: string; google: GoogleStatus }) {
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
       <SectionHead title="Synthesis" note="Read the archive back, and let it become chapters." />
+
+      <EpisodesPanel />
 
       <div className="grid split split-narrow">
         <div className="flex flex-col gap-6">
