@@ -11,8 +11,13 @@ import {
   ExternalLink,
   Eye,
   EyeOff,
+  GripVertical,
+  ArrowUp,
+  ArrowDown,
+  ArrowLeftRight,
+  LayoutGrid,
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, Reorder, useDragControls } from 'motion/react';
 
 /* =============================================================================
    DECO NOIR PRIMITIVES
@@ -759,6 +764,219 @@ const LANGUAGES: PickerGroup[] = [
   },
 ];
 
+/* =============================================================================
+   VAULT LAYOUT — the vault page's panels, in the order the writer chose.
+
+   Arrange mode puts a bar above each panel: a grip to drag it (pointer and
+   touch), arrows to move it one place, and a button to send it to the other
+   column. The order is kept in this browser (localStorage), per device, so the
+   phone and the desktop can differ. Reset goes back to the default.
+   ========================================================================== */
+
+const VAULT_PANELS = {
+  vault: 'The Vault',
+  session: 'Session',
+  entries: 'Entries',
+  verbatim: 'Word for word',
+  english: 'In English',
+  when: 'When did this happen?',
+  indicators: 'Indicators',
+} as const;
+type PanelId = keyof typeof VAULT_PANELS;
+type VaultColumns = [PanelId[], PanelId[]];
+
+const DEFAULT_VAULT_LAYOUT: VaultColumns = [
+  ['vault', 'session'],
+  ['entries', 'verbatim', 'english', 'when', 'indicators'],
+];
+const VAULT_LAYOUT_KEY = 'mystory.vaultLayout';
+
+/** A saved layout is trusted only as far as it goes: unknown ids are dropped,
+ *  duplicates ignored, and any panel it does not mention (one added in a later
+ *  version) goes back to its default column. */
+function loadVaultLayout(): VaultColumns {
+  try {
+    const raw = JSON.parse(localStorage.getItem(VAULT_LAYOUT_KEY) || 'null');
+    if (!Array.isArray(raw) || raw.length !== 2) return DEFAULT_VAULT_LAYOUT;
+    const seen = new Set<PanelId>();
+    const cols = raw.map((col: unknown) =>
+      (Array.isArray(col) ? col : []).filter((id: unknown): id is PanelId => {
+        if (typeof id !== 'string' || !(id in VAULT_PANELS) || seen.has(id as PanelId)) return false;
+        seen.add(id as PanelId);
+        return true;
+      }),
+    ) as VaultColumns;
+    DEFAULT_VAULT_LAYOUT.forEach((col, c) => col.forEach(id => !seen.has(id) && cols[c].push(id)));
+    return cols;
+  } catch {
+    return DEFAULT_VAULT_LAYOUT;
+  }
+}
+
+function ArrangeablePanel({
+  id,
+  arranging,
+  side,
+  canUp,
+  canDown,
+  onUp,
+  onDown,
+  onSwap,
+  children,
+}: {
+  id: PanelId;
+  arranging: boolean;
+  side: 0 | 1;
+  canUp: boolean;
+  canDown: boolean;
+  onUp: () => void;
+  onDown: () => void;
+  onSwap: () => void;
+  children: React.ReactNode;
+  key?: string;
+}) {
+  const controls = useDragControls();
+  const label = VAULT_PANELS[id];
+  return (
+    <Reorder.Item as="div" value={id} dragListener={false} dragControls={controls} style={{ position: 'relative' }}>
+      {arranging && (
+        <div
+          className="flex items-center gap-2 cut-sm"
+          style={{ padding: '6px 8px', marginBottom: 8, background: 'var(--panel-2, rgba(255,255,255,0.05))', border: '1px dashed var(--accent, #b8914a)' }}
+        >
+          <button
+            type="button"
+            className="btn btn-sm cut-sm"
+            style={{ cursor: 'grab', touchAction: 'none' }}
+            onPointerDown={e => controls.start(e)}
+            aria-label={`Drag ${label}`}
+            title="Drag to move"
+          >
+            <GripVertical className="w-4 h-4" />
+          </button>
+          <span className="fhint" style={{ margin: 0 }}>{label}</span>
+          <span className="flex-1" />
+          <button type="button" className="btn btn-sm cut-sm" disabled={!canUp} onClick={onUp} aria-label={`Move ${label} up`}>
+            <ArrowUp className="w-4 h-4" />
+          </button>
+          <button type="button" className="btn btn-sm cut-sm" disabled={!canDown} onClick={onDown} aria-label={`Move ${label} down`}>
+            <ArrowDown className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm cut-sm"
+            onClick={onSwap}
+            aria-label={`Move ${label} to the ${side === 0 ? 'right' : 'left'} column`}
+            title={side === 0 ? 'Move to the right column (lower down on a phone)' : 'Move to the left column (higher up on a phone)'}
+          >
+            <ArrowLeftRight className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+      {children}
+    </Reorder.Item>
+  );
+}
+
+function VaultLayout({ panels, footer }: { panels: Record<PanelId, React.ReactNode>; footer?: React.ReactNode }) {
+  const [cols, setCols] = useState<VaultColumns>(loadVaultLayout);
+  const [arranging, setArranging] = useState(false);
+
+  const update = (next: VaultColumns) => {
+    setCols(next);
+    try {
+      localStorage.setItem(VAULT_LAYOUT_KEY, JSON.stringify(next));
+    } catch {}
+  };
+
+  // Only panels that are showing take part in moves; a hidden one (Word for
+  // word, before there is a verbatim transcript) keeps its place.
+  const visible = (c: 0 | 1) => cols[c].filter(id => panels[id] != null);
+
+  const reorderVisible = (c: 0 | 1, order: PanelId[]) => {
+    const hidden = cols[c].filter(id => !order.includes(id));
+    const next = [...cols] as VaultColumns;
+    next[c] = [...order, ...hidden];
+    update(next);
+  };
+
+  const step = (c: 0 | 1, id: PanelId, by: -1 | 1) => {
+    const order = visible(c);
+    const i = order.indexOf(id);
+    const j = i + by;
+    if (i < 0 || j < 0 || j >= order.length) return;
+    [order[i], order[j]] = [order[j], order[i]];
+    reorderVisible(c, order);
+  };
+
+  const swap = (c: 0 | 1, id: PanelId) => {
+    const other = (1 - c) as 0 | 1;
+    const next: VaultColumns = [cols[0].filter(x => x !== id), cols[1].filter(x => x !== id)];
+    next[other] = [...next[other], id];
+    update(next);
+  };
+
+  const isDefault = JSON.stringify(cols) === JSON.stringify(DEFAULT_VAULT_LAYOUT);
+
+  return (
+    <>
+      <div className="flex items-center justify-end gap-2" style={{ marginBottom: 'var(--gap)' }}>
+        {arranging && !isDefault && (
+          <button type="button" className="btn btn-sm cut-sm" onClick={() => update(DEFAULT_VAULT_LAYOUT)}>
+            Reset layout
+          </button>
+        )}
+        <button
+          type="button"
+          className={`btn btn-sm cut-sm ${arranging ? 'btn-primary' : ''}`}
+          aria-pressed={arranging}
+          onClick={() => setArranging(a => !a)}
+        >
+          <span className="flex items-center gap-2">
+            <LayoutGrid className="w-4 h-4" />
+            {arranging ? 'Done arranging' : 'Arrange panels'}
+          </span>
+        </button>
+      </div>
+
+      <div className="grid split split-wide">
+        {([0, 1] as const).map(c => {
+          const order = visible(c);
+          return (
+            <div key={c} className="flex flex-col gap-6" style={{ minWidth: 0 }}>
+            <Reorder.Group
+              as="div"
+              axis="y"
+              values={order}
+              onReorder={(o: PanelId[]) => reorderVisible(c, o)}
+              className="flex flex-col gap-6"
+              style={{ minHeight: arranging ? 80 : undefined }}
+            >
+              {order.map((id, i) => (
+                <ArrangeablePanel
+                  key={id}
+                  id={id}
+                  arranging={arranging}
+                  side={c}
+                  canUp={i > 0}
+                  canDown={i < order.length - 1}
+                  onUp={() => step(c, id, -1)}
+                  onDown={() => step(c, id, 1)}
+                  onSwap={() => swap(c, id)}
+                >
+                  {panels[id]}
+                </ArrangeablePanel>
+              ))}
+            </Reorder.Group>
+            {c === 1 && footer}
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
 function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
@@ -1438,217 +1656,216 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
         </div>
       )}
 
-      <div className="grid split split-wide">
-        {/* ---- writing column ---- */}
-        <div className="flex flex-col gap-6">
-          <Frame title="The Vault">
-            <div className="inwrap cut-sm">
-              <textarea
-                className="input"
-                style={{ minHeight: '340px', fontFamily: 'var(--body)', fontSize: 'var(--step-0)', lineHeight: 1.75 }}
-                value={transcript}
-                onChange={e => {
-                  setTranscript(e.target.value);
-                  setRecovered(false); // they have seen it and taken the entry back over
-                }}
-                placeholder="Press RECORD to speak, or simply begin writing here…"
-              />
-            </div>
-
-            <AnimatePresence>
-              {aiResponse && (
-                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-6">
-                  <div className="clabel mb-2">Companion</div>
-                  <blockquote className="bq">{aiResponse}</blockquote>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            <div className="flex flex-wrap items-center gap-3 mt-6">
-              <button
-                className={`btn btn-lg cut-sm ${isRecording ? 'btn-crit' : 'btn-primary'}`}
-                aria-pressed={isRecording}
-                onClick={toggleRecording}
-              >
-                <span className="flex items-center gap-2">
-                  {isRecording ? <StopCircle className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-                  {isRecording ? 'Stop' : 'Record'}
-                </span>
-              </button>
-              <span className="keydiv" />
-              <button className="btn cut-sm" disabled={!wsReady} onClick={() => companion('speak_trigger_opinion')}>
-                Give me your opinion
-              </button>
-              <button className="btn cut-sm" disabled={!wsReady} onClick={() => companion('speak_trigger_more')}>
-                Prompt me for more
-              </button>
-              {!wsReady && <span className="fhint">Companion offline — reconnecting…</span>}
-            </div>
-          </Frame>
-
-          <Frame title="Session">
-            <div className="grid g3">
-              <div className="field">
-                <label htmlFor="pick-engine">Transcription engine</label>
-                <Picker id="pick-engine" value={engine} onChange={setEngine} groups={engineGroups(providers)} />
+      <VaultLayout
+        panels={{
+          vault: (
+            <Frame title="The Vault">
+              <div className="inwrap cut-sm">
+                <textarea
+                  className="input"
+                  style={{ minHeight: '340px', fontFamily: 'var(--body)', fontSize: 'var(--step-0)', lineHeight: 1.75 }}
+                  value={transcript}
+                  onChange={e => {
+                    setTranscript(e.target.value);
+                    setRecovered(false); // they have seen it and taken the entry back over
+                  }}
+                  placeholder="Press RECORD to speak, or simply begin writing here…"
+                />
               </div>
-              <div className="field">
-                <label htmlFor="pick-lang">Spoken language</label>
-                <Picker id="pick-lang" value={language} onChange={setLanguage} groups={LANGUAGES} />
-              </div>
-              <div className="field">
-                <label htmlFor="pick-style">How to write it down</label>
-                <Picker id="pick-style" value={style} onChange={setStyle} groups={STYLES} />
-                <span className="fhint">
-                  Either way the exact words you spoke are kept in the file. Tidying
-                  only changes which version you read first.
-                </span>
-              </div>
-              <div className="field">
-                <label>Entry title</label>
-                <div className="flex gap-2 items-stretch">
-                  <span className="inwrap cut-sm flex-1">
-                    <input
-                      className="input"
-                      value={sessionName}
-                      placeholder="Left blank, one is written for you"
-                      onChange={e => setSessionName(e.target.value)}
-                    />
-                  </span>
-                  <button className="btn btn-sm cut-sm" disabled={!transcript.trim()} onClick={autoTitle} title="Write a title with Gemini">
-                    Auto
-                  </button>
-                </div>
-              </div>
-            </div>
 
-            <div className="flex flex-wrap items-center gap-3 mt-2">
-              <button className="btn cut-sm" disabled={!transcript.trim()} onClick={() => void persist()}>
-                <span className="flex items-center gap-2">
-                  <Save className="w-3.5 h-3.5" />
-                  Save now
-                </span>
-              </button>
-              <span className="keydiv" />
-              {google.connected ? (
-                <>
-                  <button className="btn cut-sm" disabled={isArchiving || !transcript.trim()} onClick={saveToGoogleDocs}>
-                    <span className="flex items-center gap-2">
-                      <FileText className="w-3.5 h-3.5" />
-                      Archive as doc
-                    </span>
-                  </button>
-                  <button className="btn cut-sm" disabled={isArchiving || !transcript.trim()} onClick={saveToDriveMarkdown}>
-                    <span className="flex items-center gap-2">
-                      <UploadCloud className="w-3.5 h-3.5" />
-                      Archive as markdown
-                    </span>
-                  </button>
-                </>
-              ) : (
-                <button className="btn cut-sm" onClick={onLinkGoogle}>
+              <AnimatePresence>
+                {aiResponse && (
+                  <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-6">
+                    <div className="clabel mb-2">Companion</div>
+                    <blockquote className="bq">{aiResponse}</blockquote>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <div className="flex flex-wrap items-center gap-3 mt-6">
+                <button
+                  className={`btn btn-lg cut-sm ${isRecording ? 'btn-crit' : 'btn-primary'}`}
+                  aria-pressed={isRecording}
+                  onClick={toggleRecording}
+                >
                   <span className="flex items-center gap-2">
-                    <UploadCloud className="w-3.5 h-3.5" />
-                    Link Google Drive
+                    {isRecording ? <StopCircle className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                    {isRecording ? 'Stop' : 'Record'}
                   </span>
                 </button>
-              )}
-              {isArchiving && (
-                <span className="flex items-center gap-3 fhint">
-                  <span className="spinner" />
-                  Writing to your Google account…
-                </span>
-              )}
-            </div>
-            <p className="fhint mt-3">
-              Entries save themselves to this machine a few seconds after you stop typing. Archiving only adds a copy
-              in Drive.
-            </p>
-
-            <AnimatePresence>
-              {archiveLink && (
-                <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="mt-5">
-                  <div className="callout">
-                    <span className="cd" />
-                    <div className="flex flex-wrap items-center gap-4 w-full">
-                      <span className="tag good">
-                        <i />
-                        Saved
-                      </span>
-                      <span className="flex-1">This entry now exists in your own Google space.</span>
-                      <a className="btn btn-sm cut-sm no-underline" href={archiveLink} target="_blank" rel="noreferrer">
-                        <span className="flex items-center gap-2">
-                          View <ExternalLink className="w-3 h-3" />
-                        </span>
-                      </a>
-                    </div>
-                  </div>
-                </motion.div>
-              )}
-              {archiveError && (
-                <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="mt-5">
-                  <div className="callout crit">
-                    <span className="cd" />
-                    <span>
-                      <b>Drive refused the write.</b> {archiveError}
+                <span className="keydiv" />
+                <button className="btn cut-sm" disabled={!wsReady} onClick={() => companion('speak_trigger_opinion')}>
+                  Give me your opinion
+                </button>
+                <button className="btn cut-sm" disabled={!wsReady} onClick={() => companion('speak_trigger_more')}>
+                  Prompt me for more
+                </button>
+                {!wsReady && <span className="fhint">Companion offline — reconnecting…</span>}
+              </div>
+            </Frame>
+          ),
+          session: (
+            <Frame title="Session">
+              <div className="grid g3">
+                <div className="field">
+                  <label htmlFor="pick-engine">Transcription engine</label>
+                  <Picker id="pick-engine" value={engine} onChange={setEngine} groups={engineGroups(providers)} />
+                </div>
+                <div className="field">
+                  <label htmlFor="pick-lang">Spoken language</label>
+                  <Picker id="pick-lang" value={language} onChange={setLanguage} groups={LANGUAGES} />
+                </div>
+                <div className="field">
+                  <label htmlFor="pick-style">How to write it down</label>
+                  <Picker id="pick-style" value={style} onChange={setStyle} groups={STYLES} />
+                  <span className="fhint">
+                    Either way the exact words you spoke are kept in the file. Tidying
+                    only changes which version you read first.
+                  </span>
+                </div>
+                <div className="field">
+                  <label>Entry title</label>
+                  <div className="flex gap-2 items-stretch">
+                    <span className="inwrap cut-sm flex-1">
+                      <input
+                        className="input"
+                        value={sessionName}
+                        placeholder="Left blank, one is written for you"
+                        onChange={e => setSessionName(e.target.value)}
+                      />
                     </span>
+                    <button className="btn btn-sm cut-sm" disabled={!transcript.trim()} onClick={autoTitle} title="Write a title with Gemini">
+                      Auto
+                    </button>
                   </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </Frame>
-        </div>
-
-        {/* ---- vault contents + indicators ---- */}
-        <div className="flex flex-col gap-6">
-          <Frame
-            title="Entries"
-            headRight={entries.length > 0 ? <span className="tag"><i />{entries.length}</span> : undefined}
-          >
-            {entries.length === 0 ? (
-              <div className="empty">
-                <span className="emptymark cut" />
-                <span className="fhint">The vault on this machine is empty.</span>
+                </div>
               </div>
-            ) : (
-              <div className="flex flex-col max-h-96 overflow-y-auto">
-                {entries.map(e => (
-                  <div key={e.id} className="listrow">
-                    <button
-                      className="flex flex-col flex-1 min-w-0 text-left"
-                      style={{ background: 'none', border: 0, cursor: 'pointer', padding: 0 }}
-                      onClick={() => void openEntry(e.id)}
-                      aria-current={e.id === entryId}
-                    >
-                      <span
-                        className="listname truncate w-full"
-                        style={{ color: e.id === entryId ? 'var(--accent-hi)' : undefined }}
+
+              <div className="flex flex-wrap items-center gap-3 mt-2">
+                <button className="btn cut-sm" disabled={!transcript.trim()} onClick={() => void persist()}>
+                  <span className="flex items-center gap-2">
+                    <Save className="w-3.5 h-3.5" />
+                    Save now
+                  </span>
+                </button>
+                <span className="keydiv" />
+                {google.connected ? (
+                  <>
+                    <button className="btn cut-sm" disabled={isArchiving || !transcript.trim()} onClick={saveToGoogleDocs}>
+                      <span className="flex items-center gap-2">
+                        <FileText className="w-3.5 h-3.5" />
+                        Archive as doc
+                      </span>
+                    </button>
+                    <button className="btn cut-sm" disabled={isArchiving || !transcript.trim()} onClick={saveToDriveMarkdown}>
+                      <span className="flex items-center gap-2">
+                        <UploadCloud className="w-3.5 h-3.5" />
+                        Archive as markdown
+                      </span>
+                    </button>
+                  </>
+                ) : (
+                  <button className="btn cut-sm" onClick={onLinkGoogle}>
+                    <span className="flex items-center gap-2">
+                      <UploadCloud className="w-3.5 h-3.5" />
+                      Link Google Drive
+                    </span>
+                  </button>
+                )}
+                {isArchiving && (
+                  <span className="flex items-center gap-3 fhint">
+                    <span className="spinner" />
+                    Writing to your Google account…
+                  </span>
+                )}
+              </div>
+              <p className="fhint mt-3">
+                Entries save themselves to this machine a few seconds after you stop typing. Archiving only adds a copy
+                in Drive.
+              </p>
+
+              <AnimatePresence>
+                {archiveLink && (
+                  <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="mt-5">
+                    <div className="callout">
+                      <span className="cd" />
+                      <div className="flex flex-wrap items-center gap-4 w-full">
+                        <span className="tag good">
+                          <i />
+                          Saved
+                        </span>
+                        <span className="flex-1">This entry now exists in your own Google space.</span>
+                        <a className="btn btn-sm cut-sm no-underline" href={archiveLink} target="_blank" rel="noreferrer">
+                          <span className="flex items-center gap-2">
+                            View <ExternalLink className="w-3 h-3" />
+                          </span>
+                        </a>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+                {archiveError && (
+                  <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="mt-5">
+                    <div className="callout crit">
+                      <span className="cd" />
+                      <span>
+                        <b>Drive refused the write.</b> {archiveError}
+                      </span>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </Frame>
+          ),
+          entries: (
+            <Frame
+              title="Entries"
+              headRight={entries.length > 0 ? <span className="tag"><i />{entries.length}</span> : undefined}
+            >
+              {entries.length === 0 ? (
+                <div className="empty">
+                  <span className="emptymark cut" />
+                  <span className="fhint">The vault on this machine is empty.</span>
+                </div>
+              ) : (
+                <div className="flex flex-col max-h-96 overflow-y-auto">
+                  {entries.map(e => (
+                    <div key={e.id} className="listrow">
+                      <button
+                        className="flex flex-col flex-1 min-w-0 text-left"
+                        style={{ background: 'none', border: 0, cursor: 'pointer', padding: 0 }}
+                        onClick={() => void openEntry(e.id)}
+                        aria-current={e.id === entryId}
                       >
-                        {e.title}
-                      </span>
-                      <span className="listsub">
-                        {shortDate(e.created)} · {e.words} words{e.audio ? ' · audio' : ''}
-                      </span>
-                    </button>
-                    {e.drive ? (
-                      <span className="tag good"><i />Mirrored</span>
-                    ) : (
-                      <span className="tag"><i />Local</span>
-                    )}
-                    <button
-                      className="btn btn-sm cut-sm"
-                      title="Move to the vault trash — the file stays on disk"
-                      onClick={() => void trashEntry(e.id)}
-                    >
-                      Trash
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Frame>
-
-          {verbatim && (
+                        <span
+                          className="listname truncate w-full"
+                          style={{ color: e.id === entryId ? 'var(--accent-hi)' : undefined }}
+                        >
+                          {e.title}
+                        </span>
+                        <span className="listsub">
+                          {shortDate(e.created)} · {e.words} words{e.audio ? ' · audio' : ''}
+                        </span>
+                      </button>
+                      {e.drive ? (
+                        <span className="tag good"><i />Mirrored</span>
+                      ) : (
+                        <span className="tag"><i />Local</span>
+                      )}
+                      <button
+                        className="btn btn-sm cut-sm"
+                        title="Move to the vault trash — the file stays on disk"
+                        onClick={() => void trashEntry(e.id)}
+                      >
+                        Trash
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Frame>
+          ),
+          verbatim: verbatim ? (
             <Frame title="Word for word">
               <p className="sec-note" style={{ marginBottom: 'var(--gap)' }}>
                 What you actually said, before the fillers were taken out. Kept in
@@ -1663,151 +1880,157 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
                 </p>
               )}
             </Frame>
-          )}
+          ) : null,
+          english: (
+            <Frame title="In English">
+              <p className="sec-note" style={{ marginBottom: 'var(--gap)' }}>
+                For entries written in Greek. The original is kept exactly as you
+                wrote it — this sits beside it, never over it.
+              </p>
+              <div className="flex items-center gap-3 flex-wrap">
+                <button className="btn btn-sm cut-sm" disabled={translating || !transcript.trim()} onClick={translateIt}>
+                  <span className="flex items-center gap-2">
+                    {translating ? <RefreshCw className="w-3 h-3 animate-spin" /> : null}
+                    {translating ? 'Translating…' : english ? 'Translate again' : 'Translate'}
+                  </span>
+                </button>
+                {englishBy === 'deepl' && <span className="tag good">DeepL</span>}
+                {englishBy === 'gemini-live' && <span className="tag good">Gemini Live — from your voice</span>}
+                {englishBy === 'model' && <span className="tag">a language model</span>}
+              </div>
 
-          <Frame title="In English">
-            <p className="sec-note" style={{ marginBottom: 'var(--gap)' }}>
-              For entries written in Greek. The original is kept exactly as you
-              wrote it — this sits beside it, never over it.
-            </p>
-            <div className="flex items-center gap-3 flex-wrap">
-              <button className="btn btn-sm cut-sm" disabled={translating || !transcript.trim()} onClick={translateIt}>
-                <span className="flex items-center gap-2">
-                  {translating ? <RefreshCw className="w-3 h-3 animate-spin" /> : null}
-                  {translating ? 'Translating…' : english ? 'Translate again' : 'Translate'}
-                </span>
-              </button>
-              {englishBy === 'deepl' && <span className="tag good">DeepL</span>}
-              {englishBy === 'gemini-live' && <span className="tag good">Gemini Live — from your voice</span>}
-              {englishBy === 'model' && <span className="tag">a language model</span>}
-            </div>
+              {englishBy === 'model' && (
+                <div className="callout warn" style={{ marginTop: 'var(--gap)' }}>
+                  <span className="cd" />
+                  <span>
+                    No DeepL key is set, so a language model did this. It will have
+                    tidied the grammar and smoothed the phrasing — fine for reading
+                    back, less so if the exact wording matters. A DeepL key renders
+                    rather than rewrites.
+                  </span>
+                </div>
+              )}
 
-            {englishBy === 'model' && (
-              <div className="callout warn" style={{ marginTop: 'var(--gap)' }}>
+              {english && (
+                <p className="sec-note" style={{ marginTop: 'var(--gap)', whiteSpace: 'pre-wrap' }}>
+                  {english}
+                </p>
+              )}
+            </Frame>
+          ),
+          when: (
+            <Frame title="When did this happen?">
+              <p className="sec-note" style={{ marginBottom: 'var(--gap)' }}>
+                Not when you wrote it — when it happened. Your own words are enough;
+                a rough range is all the ordering needs.
+              </p>
+
+              <Field
+                label="In your words"
+                value={occurred.text || ''}
+                onChange={v => setOccurred(prev => ({ ...prev, text: v }))}
+                placeholder="around when we moved"
+                hint="Kept exactly as you type it. Never rewritten."
+              />
+
+              <div className="grid g2">
+                <Field
+                  label="From"
+                  value={occurred.start || ''}
+                  onChange={v => setOccurred(prev => ({ ...prev, start: v }))}
+                  placeholder="2011"
+                />
+                <Field
+                  label="Until"
+                  value={occurred.end || ''}
+                  onChange={v => setOccurred(prev => ({ ...prev, end: v }))}
+                  placeholder="2012"
+                />
+              </div>
+
+              <div className="flex items-center gap-3 flex-wrap">
+                <button className="btn btn-sm cut-sm" disabled={datingBusy || !transcript.trim()} onClick={dateIt}>
+                  <span className="flex items-center gap-2">
+                    {datingBusy ? <RefreshCw className="w-3 h-3 animate-spin" /> : null}
+                    {datingBusy ? 'Reading…' : 'Work it out for me'}
+                  </span>
+                </button>
+                {showRange(occurred) && <span className="tag">{showRange(occurred)}</span>}
+              </div>
+
+              {occurred.confidence && (
+                <p className="fhint" style={{ marginTop: 8 }}>{CONFIDENCE_NOTE[occurred.confidence]}</p>
+              )}
+            </Frame>
+          ),
+          indicators: (
+            <Frame title="Indicators" lit>
+              <p className="sec-note" style={{ marginBottom: 'var(--gap)' }}>
+                Named patterns as they surface in the text. They travel with the entry into the archive.
+              </p>
+              <div className="flex flex-col gap-4 items-stretch">
+                {CATEGORY_ORDER.filter(c => detectedIndicators.some(i => i.category === c)).map(cat => (
+                  <div key={cat}>
+                    <p className="k" style={{ marginBottom: 6 }}>{CATEGORY_LABEL[cat]}</p>
+                    <div className="flex flex-col gap-3 items-start">
+                      {detectedIndicators
+                        .filter(i => i.category === cat)
+                        .map(i => (
+                          <motion.div
+                            key={i.id}
+                            initial={{ opacity: 0, x: 12 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            style={{ width: '100%' }}
+                          >
+                            <span className={`tag${cat === 'protection' ? ' good' : ''}`}>{i.label}</span>
+                            <p className="fhint" style={{ marginTop: 6 }}>{i.definition}</p>
+                            {i.evidence && (
+                              <p
+                                className="sec-note"
+                                style={{ marginTop: 6, paddingLeft: 10, borderLeft: '2px solid var(--rule)' }}
+                              >
+                                “{i.evidence}”
+                              </p>
+                            )}
+                          </motion.div>
+                        ))}
+                    </div>
+                  </div>
+                ))}
+
+                {/* Entries written before the vocabulary carried definitions. */}
+                {detectedIndicators.length === 0 &&
+                  detectedTags.map(tag => (
+                    <motion.span key={tag} initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} className="tag">
+                      {tag}
+                    </motion.span>
+                  ))}
+
+                {detectedTags.length === 0 && detectedIndicators.length === 0 && (
+                  <div className="empty w-full">
+                    <span className="emptymark cut" />
+                    <span className="fhint">Nothing named yet.</span>
+                  </div>
+                )}
+              </div>
+            </Frame>
+          ),
+        }}
+        footer={
+          <>
+            {/* Only true inside an iframe; shown everywhere it was just noise. */}
+            {window.self !== window.top && (
+              <div className="callout warn">
                 <span className="cd" />
                 <span>
-                  No DeepL key is set, so a language model did this. It will have
-                  tidied the grammar and smoothed the phrasing — fine for reading
-                  back, less so if the exact wording matters. A DeepL key renders
-                  rather than rewrites.
+                  <b>Microphone.</b> A browser will not grant the microphone inside an embedded preview. Open the app in
+                  its own tab if RECORD captures nothing.
                 </span>
               </div>
             )}
-
-            {english && (
-              <p className="sec-note" style={{ marginTop: 'var(--gap)', whiteSpace: 'pre-wrap' }}>
-                {english}
-              </p>
-            )}
-          </Frame>
-
-          <Frame title="When did this happen?">
-            <p className="sec-note" style={{ marginBottom: 'var(--gap)' }}>
-              Not when you wrote it — when it happened. Your own words are enough;
-              a rough range is all the ordering needs.
-            </p>
-
-            <Field
-              label="In your words"
-              value={occurred.text || ''}
-              onChange={v => setOccurred(prev => ({ ...prev, text: v }))}
-              placeholder="around when we moved"
-              hint="Kept exactly as you type it. Never rewritten."
-            />
-
-            <div className="grid g2">
-              <Field
-                label="From"
-                value={occurred.start || ''}
-                onChange={v => setOccurred(prev => ({ ...prev, start: v }))}
-                placeholder="2011"
-              />
-              <Field
-                label="Until"
-                value={occurred.end || ''}
-                onChange={v => setOccurred(prev => ({ ...prev, end: v }))}
-                placeholder="2012"
-              />
-            </div>
-
-            <div className="flex items-center gap-3 flex-wrap">
-              <button className="btn btn-sm cut-sm" disabled={datingBusy || !transcript.trim()} onClick={dateIt}>
-                <span className="flex items-center gap-2">
-                  {datingBusy ? <RefreshCw className="w-3 h-3 animate-spin" /> : null}
-                  {datingBusy ? 'Reading…' : 'Work it out for me'}
-                </span>
-              </button>
-              {showRange(occurred) && <span className="tag">{showRange(occurred)}</span>}
-            </div>
-
-            {occurred.confidence && (
-              <p className="fhint" style={{ marginTop: 8 }}>{CONFIDENCE_NOTE[occurred.confidence]}</p>
-            )}
-          </Frame>
-
-          <Frame title="Indicators" lit>
-            <p className="sec-note" style={{ marginBottom: 'var(--gap)' }}>
-              Named patterns as they surface in the text. They travel with the entry into the archive.
-            </p>
-            <div className="flex flex-col gap-4 items-stretch">
-              {CATEGORY_ORDER.filter(c => detectedIndicators.some(i => i.category === c)).map(cat => (
-                <div key={cat}>
-                  <p className="k" style={{ marginBottom: 6 }}>{CATEGORY_LABEL[cat]}</p>
-                  <div className="flex flex-col gap-3 items-start">
-                    {detectedIndicators
-                      .filter(i => i.category === cat)
-                      .map(i => (
-                        <motion.div
-                          key={i.id}
-                          initial={{ opacity: 0, x: 12 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          style={{ width: '100%' }}
-                        >
-                          <span className={`tag${cat === 'protection' ? ' good' : ''}`}>{i.label}</span>
-                          <p className="fhint" style={{ marginTop: 6 }}>{i.definition}</p>
-                          {i.evidence && (
-                            <p
-                              className="sec-note"
-                              style={{ marginTop: 6, paddingLeft: 10, borderLeft: '2px solid var(--rule)' }}
-                            >
-                              “{i.evidence}”
-                            </p>
-                          )}
-                        </motion.div>
-                      ))}
-                  </div>
-                </div>
-              ))}
-
-              {/* Entries written before the vocabulary carried definitions. */}
-              {detectedIndicators.length === 0 &&
-                detectedTags.map(tag => (
-                  <motion.span key={tag} initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} className="tag">
-                    {tag}
-                  </motion.span>
-                ))}
-
-              {detectedTags.length === 0 && detectedIndicators.length === 0 && (
-                <div className="empty w-full">
-                  <span className="emptymark cut" />
-                  <span className="fhint">Nothing named yet.</span>
-                </div>
-              )}
-            </div>
-          </Frame>
-
-          {/* Only true inside an iframe; shown everywhere it was just noise. */}
-          {window.self !== window.top && (
-            <div className="callout warn">
-              <span className="cd" />
-              <span>
-                <b>Microphone.</b> A browser will not grant the microphone inside an embedded preview. Open the app in
-                its own tab if RECORD captures nothing.
-              </span>
-            </div>
-          )}
-        </div>
-      </div>
+          </>
+        }
+      />
     </motion.div>
   );
 }

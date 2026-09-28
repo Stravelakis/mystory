@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 
 ## [Unreleased]
 
+### Added
+- The vault page's panels can be rearranged. **Arrange panels** lets you drag a panel by its grip (touch works too), move it with the arrows, or send it to the other column. **Reset layout** undoes it all. The layout is remembered in each browser, so your phone and desktop can differ.
+
 ## [1.1.0] - 2026-09-25
 
 ### Added
