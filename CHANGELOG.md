@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 ## [Unreleased]
 
 ### Added
+- **My words** (Settings): names, places and family words the transcriber can't know, saved as `vault/words.md`. The list is given to every transcription, and the tidying pass may correct a misheard word to one on the list. To help build it: four guided prompts, one-tap therapy terms, and **Find words in my entries**, which only suggests words that really appear in your entries.
+- **Transcribe again** on any entry with a recording: it runs through today's transcriber with your word list. The previous text is copied to `.trash` first.
 - **Microphone** and **Sound cleanup** settings in the Session panel, plus a live level meter. With cleanup Off, a good USB microphone reaches the transcriber untouched, without the browser's phone-call filters.
 - The vault page's panels can be rearranged. **Arrange panels** lets you drag a panel by its grip (touch works too), move it with the arrows, or send it to the other column. **Reset layout** undoes it all. The layout is remembered in each browser, so your phone and desktop can differ.
 
