@@ -97,7 +97,7 @@ import { draftEpisode, proposeEpisodes, render as renderForEpisode } from './epi
 import { repair, checkUpdate } from './maintenance.ts';
 import { loadWords, saveWords, wordsHint, keepIfPresent } from './words.ts';
 import { openLiveTranscription } from './live.ts';
-import { loadScript, loadClips, appendScript, cleanScript, saveClip, readClip, wordErrorRate, sampleClips, peakDb, SILENT_DB, setAsideSilentClips } from './voice.ts';
+import { loadScript, loadClips, appendScript, cleanScript, saveClip, readClip, wordErrorRate, sampleClips, peakDb, SILENT_DB, setAsideSilentClips, loadSets, createSet, updateSet, isSetId, loadMeasures, saveMeasure } from './voice.ts';
 import { planParts, openChapter, readChapter, savePart, listChapters, isChapterId } from './chapters.ts';
 import { timelineKey } from './vault.ts';
 
@@ -867,10 +867,40 @@ ${corpus}
     }
   });
 
-  app.get('/api/voice', async (_req, res) => {
-    const [script, clips] = await Promise.all([loadScript(), loadClips()]);
+  app.get('/api/voice', async (req, res) => {
+    const set = isSetId(req.query.set) ? String(req.query.set) : 's1';
+    const [script, clips, all, sets, measures] = await Promise.all([loadScript(), loadClips(set), loadClips(), loadSets(), loadMeasures()]);
     const seconds = clips.reduce((s, c) => s + c.bytes, 0) / 8000; // 64 kbps
-    res.json({ success: true, script, clips: clips.map(c => c.n), minutes: Math.round(seconds / 60) });
+    // One row per set, so microphones and setups can be compared.
+    const table = sets.map(st => {
+      const mine = all.filter(c => c.set === st.id);
+      const gaps = mine.map(c => c.gapDb).filter((g): g is number => typeof g === 'number');
+      const m = measures.find(x => x.set === st.id);
+      return {
+        ...st,
+        clips: mine.length,
+        gapDb: gaps.length ? Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length) : null,
+        best: m?.best || null,
+        measuredAt: m?.at || null,
+      };
+    });
+    res.json({ success: true, set, script, clips: clips.map(c => c.n), minutes: Math.round(seconds / 60), sets: table });
+  });
+
+  app.post('/api/voice/sets', async (req, res) => {
+    try {
+      res.json({ success: true, set: await createSet(req.body || {}) });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message || String(e) });
+    }
+  });
+
+  /** The browser reports what the microphone really did (automatic volume,
+   *  noise suppression) when a set starts recording. */
+  app.put('/api/voice/sets/:id', async (req, res) => {
+    if (!isSetId(req.params.id)) return res.status(400).json({ success: false, error: 'Not a set.' });
+    await updateSet(req.params.id, req.body || {});
+    res.json({ success: true });
   });
 
   /** Writes more reading sentences, in batches, into the script. */
@@ -928,7 +958,9 @@ Return ONLY JSON: {"sentences":["...", "..."]}`,
           error: 'That recording is silent: the microphone is not hearing you. Check the Microphone choice and its level bar, then read it again.',
         });
       }
-      const clip = await saveClip(n, req.file.buffer, req.file.mimetype || 'audio/webm', peak);
+      const set = isSetId(req.query.set) ? String(req.query.set) : 's1';
+      const gap = Number(req.body?.gapDb);
+      const clip = await saveClip(n, req.file.buffer, req.file.mimetype || 'audio/webm', peak, set, Number.isFinite(gap) ? gap : undefined);
       res.json({ success: true, clip: { n: clip.n, bytes: clip.bytes } });
     } catch (e: any) {
       res.status(400).json({ success: false, error: e.message || String(e) });
@@ -939,6 +971,7 @@ Return ONLY JSON: {"sentences":["...", "..."]}`,
      time to stay inside free-tier limits), so it runs in the background and
      the page polls for progress. One measurement at a time. */
   let measure: {
+    set: string;
     running: boolean;
     done: number;
     total: number;
@@ -953,7 +986,8 @@ Return ONLY JSON: {"sentences":["...", "..."]}`,
     const config = await loadConfig();
     // Never score engines on silence again.
     const aside = await setAsideSilentClips().catch(() => ({ silent: [] as number[] }));
-    const clips = sampleClips(await loadClips(), Math.max(5, Math.min(40, Number(req.body?.sample) || 15)));
+    const set = isSetId(req.body?.set) ? String(req.body.set) : 's1';
+    const clips = sampleClips(await loadClips(set), Math.max(5, Math.min(40, Number(req.body?.sample) || 15)));
     if (aside.silent.length && clips.length < 5) {
       return res.status(400).json({
         success: false,
@@ -965,6 +999,7 @@ Return ONLY JSON: {"sentences":["...", "..."]}`,
     if (engines.length === 0) return res.status(400).json({ success: false, error: 'No transcription engine is set up.' });
     const script = await loadScript();
     measure = {
+      set,
       running: true,
       done: 0,
       total: engines.length * clips.length,
@@ -1003,6 +1038,14 @@ Return ONLY JSON: {"sentences":["...", "..."]}`,
         r.wer = scored + r.failures ? (errSum + r.failures) / (scored + r.failures) : null;
       }
       m.running = false;
+      // Kept per set, for the comparison table.
+      const ranked = m.results.filter(r => r.wer !== null).sort((a, b) => (a.wer ?? 1) - (b.wer ?? 1));
+      await saveMeasure({
+        set: m.set,
+        at: new Date().toISOString(),
+        ...(ranked[0] ? { best: { label: ranked[0].label, wer: ranked[0].wer! } } : {}),
+        results: m.results.map(r => ({ label: r.label, providerId: r.providerId, model: r.model, wer: r.wer, failures: r.failures })),
+      }).catch(() => {});
     })().catch(e => {
       m.running = false;
       m.error = e?.message || String(e);

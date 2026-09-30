@@ -24,7 +24,7 @@
    ========================================================================== */
 
 import { GoogleGenAI } from '@google/genai';
-import { liveChat, liveTranscribe } from './live.ts';
+import { liveChat, liveTranscribe, prepareAudio, AUDIO_CLEANUP } from './live.ts';
 
 export type Routing = 'cloud-first' | 'local-first' | 'local-only';
 
@@ -917,6 +917,18 @@ export interface TranscribeResult {
   local: boolean;
 }
 
+/** Measured on the owner's own clips, 30 Sep 2026: 15 read sentences with
+ *  known text, words wrong (failures counted as all wrong):
+ *                          whisper-large-v3   gemini-3.5-transcribe-live
+ *    as recorded                 52%                  52%
+ *    rumble cut                  54%                  46%
+ *    rumble cut + loudness       53%                  41%   <- chosen
+ *    + light denoise             55%                  42%
+ *    + strong denoise            74%                  48%
+ *  Cleanup helps a little; the recording itself matters far more (those
+ *  clips had the voice about 10 dB above the noise). */
+export const AUDIO_CLEANUP_DEFAULT = 'level';
+
 export async function transcribe(
   config: Record<string, string>,
   buffer: Buffer,
@@ -927,8 +939,20 @@ export async function transcribe(
     words?: string;
     /** Exactly this provider and model, nothing else (the voice measurement). */
     only?: { providerId: string; model: string };
+    /** A key of AUDIO_CLEANUP; defaults to the AUDIO_CLEANUP setting. */
+    cleanup?: string;
   } = {},
 ): Promise<TranscribeResult> {
+  const cleanupKey = opts.cleanup ?? (config.AUDIO_CLEANUP || AUDIO_CLEANUP_DEFAULT);
+  if (AUDIO_CLEANUP[cleanupKey]) {
+    try {
+      buffer = await prepareAudio(buffer, AUDIO_CLEANUP[cleanupKey]);
+      mimetype = 'audio/wav';
+    } catch (e: any) {
+      // Without ffmpeg the recording goes as it is; cleanup is a help, not a gate.
+      console.warn(`[transcribe] audio cleanup skipped: ${e?.message || e}`);
+    }
+  }
   const language = opts.language && LANGUAGE_NAMES[opts.language] ? opts.language : '';
   const spoken =
     (language

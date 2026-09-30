@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 
 ## [Unreleased]
 
+### Added
+- **Recording sets** in Your voice: one set per microphone or setup, each with its own reading, and a **Quick mic test** option (15 sentences). A comparison table shows each set's microphone, how far the voice sits above the background, whether the browser's automatic volume was actually on, and the best engine's word error rate.
+- Each set records what the microphone really did (from the browser's own report). If automatic volume stayed on after being turned off, the reading screen says so.
+- Recordings are cleaned before transcription: rumble cut and loudness evened out (setting `AUDIO_CLEANUP`, default `level`). Measured on real clips, this took Gemini Live from 52% to 41% words wrong. Strong noise reduction made things worse, so it isn't offered. The original recording is never changed.
+- **Test microphone** now tells you what to fix: too quiet (input volume, which side of the mic, distance), too noisy (rumble, fans, pattern), or good, with the voice-above-background figure.
+
 ### Fixed
 - **A dead microphone went unnoticed.** On 30 Sep 2026, 100 reading clips were recorded from a microphone that wasn't hearing anything, and every engine was then scored on silence. Now:
   - silent reading clips are refused on the spot,

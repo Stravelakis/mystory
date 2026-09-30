@@ -58,3 +58,31 @@ describe('the script and the clips', () => {
     await expect(v.saveClip(99, Buffer.from('x'), 'audio/webm')).rejects.toThrow();
   });
 });
+
+describe('recording sets', () => {
+  it('keeps each set\'s clips apart, and old clips are Set 1', async () => {
+    const s2 = await v.createSet({ name: 'Uber Mic cardioid', limit: 15 });
+    expect(s2.limit).toBe(15);
+    await v.saveClip(2, Buffer.from('second mic'), 'audio/webm', -20, s2.id, 31.6);
+    const set1 = await v.loadClips('s1');
+    const set2 = await v.loadClips(s2.id);
+    expect(set1.map(c => c.n)).toEqual([1]);
+    expect(set2).toHaveLength(1);
+    expect(set2[0]).toMatchObject({ n: 2, set: s2.id, gapDb: 32 });
+    expect(set2[0].file).toBe(`clips/${s2.id}/0002.webm`);
+    const sets = await v.loadSets();
+    expect(sets.map(s => s.name)).toEqual(['Set 1', 'Uber Mic cardioid']);
+  });
+
+  it('remembers what the microphone actually did, and only known fields', async () => {
+    const s3 = await v.createSet({ name: 'headset' });
+    await v.updateSet(s3.id, { mic: 'USB Headset', applied: { autoGainControl: true, sampleRate: 48000, evil: '<x>' } as any });
+    const saved = (await v.loadSets()).find(s => s.id === s3.id)!;
+    expect(saved.mic).toBe('USB Headset');
+    expect(saved.applied).toEqual({ autoGainControl: true, sampleRate: 48000 });
+  });
+
+  it('refuses a set id that could escape the folder', async () => {
+    await expect(v.saveClip(1, Buffer.from('x'), 'audio/webm', -20, '../x')).rejects.toThrow();
+  });
+});

@@ -31,6 +31,8 @@ const VOICE_DIR = path.join(VAULT_DIR, 'voice');
 const CLIP_DIR = path.join(VOICE_DIR, 'clips');
 const SCRIPT_FILE = path.join(VOICE_DIR, 'script.json');
 const CLIPS_FILE = path.join(VOICE_DIR, 'clips.json');
+const SETS_FILE = path.join(VOICE_DIR, 'sets.json');
+const MEASURES_FILE = path.join(VOICE_DIR, 'measures.json');
 
 export interface ScriptLine {
   n: number;
@@ -47,6 +49,35 @@ export interface Clip {
   at: string;
   /** Loudest moment, in dB (0 = full scale). Set once checked. */
   peakDb?: number;
+  /** Which recording set it belongs to. Clips from before sets are "s1". */
+  set?: string;
+  /** How far the voice was above the background, measured by the browser
+   *  while recording (loudest twentieth vs quietest tenth). */
+  gapDb?: number;
+}
+
+/** A batch of readings made one way: one microphone, one position, one set
+ *  of settings. Sets exist to compare microphones and setups by the numbers
+ *  instead of by ear. */
+export interface RecordingSet {
+  id: string;
+  name: string;
+  created: string;
+  /** Read only the first N lines (a quick microphone test). */
+  limit?: number;
+  /** The microphone's name as the browser reported it. */
+  mic?: string;
+  /** What the browser actually applied, from MediaStreamTrack.getSettings(). */
+  applied?: { autoGainControl?: boolean; noiseSuppression?: boolean; echoCancellation?: boolean; sampleRate?: number; channelCount?: number };
+  /** What was asked for (Sound cleanup on or off). */
+  cleanup?: string;
+}
+
+export interface SetMeasure {
+  set: string;
+  at: string;
+  best?: { label: string; wer: number };
+  results: { label: string; providerId: string; model: string; wer: number | null; failures: number }[];
 }
 
 /** Below this the clip holds no voice. A quiet speaker on a good mic peaks
@@ -93,7 +124,64 @@ async function writeJson(file: string, data: unknown) {
 }
 
 export const loadScript = () => readJson<ScriptLine[]>(SCRIPT_FILE, []);
-export const loadClips = () => readJson<Clip[]>(CLIPS_FILE, []);
+/** All clips, or one set's. Clips from before sets count as set "s1". */
+export async function loadClips(set?: string): Promise<Clip[]> {
+  const all = (await readJson<Clip[]>(CLIPS_FILE, [])).map(c => ({ ...c, set: c.set || 's1' }));
+  return set ? all.filter(c => c.set === set) : all;
+}
+
+export async function loadSets(): Promise<RecordingSet[]> {
+  const sets = await readJson<RecordingSet[]>(SETS_FILE, []);
+  // Readings made before sets existed become the first set.
+  if (!sets.some(s => s.id === 's1') && (await loadClips('s1')).length) {
+    sets.unshift({ id: 's1', name: 'Set 1', created: new Date(0).toISOString() });
+  }
+  return sets;
+}
+
+const SET_ID_RE = /^s[0-9a-z]{1,12}$/;
+export const isSetId = (id: unknown): id is string => typeof id === 'string' && SET_ID_RE.test(id);
+
+export async function createSet(input: Partial<RecordingSet>): Promise<RecordingSet> {
+  const sets = await loadSets();
+  const id = `s${Date.now().toString(36)}`;
+  const set: RecordingSet = {
+    id,
+    name: String(input.name || `Set ${sets.length + 1}`).slice(0, 80),
+    created: new Date().toISOString(),
+    ...(input.limit ? { limit: Math.max(5, Math.min(500, Number(input.limit))) } : {}),
+    ...(input.mic ? { mic: String(input.mic).slice(0, 120) } : {}),
+    ...(input.cleanup ? { cleanup: String(input.cleanup).slice(0, 10) } : {}),
+  };
+  await writeJson(SETS_FILE, [...sets, set]);
+  return set;
+}
+
+/** Records what the microphone actually did, the first time a set records. */
+export async function updateSet(id: string, patch: Pick<RecordingSet, 'mic' | 'applied' | 'cleanup'>): Promise<void> {
+  const sets = await loadSets();
+  const s = sets.find(x => x.id === id);
+  if (!s) return;
+  if (patch.mic) s.mic = String(patch.mic).slice(0, 120);
+  if (patch.cleanup) s.cleanup = String(patch.cleanup).slice(0, 10);
+  if (patch.applied && typeof patch.applied === 'object') {
+    const a = patch.applied as any;
+    s.applied = {
+      ...(typeof a.autoGainControl === 'boolean' ? { autoGainControl: a.autoGainControl } : {}),
+      ...(typeof a.noiseSuppression === 'boolean' ? { noiseSuppression: a.noiseSuppression } : {}),
+      ...(typeof a.echoCancellation === 'boolean' ? { echoCancellation: a.echoCancellation } : {}),
+      ...(Number.isFinite(a.sampleRate) ? { sampleRate: a.sampleRate } : {}),
+      ...(Number.isFinite(a.channelCount) ? { channelCount: a.channelCount } : {}),
+    };
+  }
+  await writeJson(SETS_FILE, sets);
+}
+
+export const loadMeasures = () => readJson<SetMeasure[]>(MEASURES_FILE, []);
+export async function saveMeasure(m: SetMeasure): Promise<void> {
+  const all = (await loadMeasures()).filter(x => x.set !== m.set);
+  await writeJson(MEASURES_FILE, [...all, m]);
+}
 
 /** Keeps sentences that are readable aloud in one breath, drops duplicates. */
 export function cleanScript(raw: unknown, language: 'el' | 'en'): ScriptLine[] {
@@ -132,22 +220,42 @@ export async function appendScript(lines: ScriptLine[]): Promise<ScriptLine[]> {
 const EXT: Record<string, string> = { webm: 'webm', ogg: 'ogg', mp4: 'm4a', wav: 'wav' };
 
 /** Saves (or replaces — "Redo") the clip for script line n. */
-export async function saveClip(n: number, audio: Buffer, mime: string, peak?: number): Promise<Clip> {
+export async function saveClip(
+  n: number,
+  audio: Buffer,
+  mime: string,
+  peak?: number,
+  set = 's1',
+  gapDb?: number,
+): Promise<Clip> {
   const script = await loadScript();
   const line = script.find(l => l.n === n);
   if (!line) throw new Error('That line is not in the script.');
-  await fs.mkdir(CLIP_DIR, { recursive: true, mode: 0o700 });
+  if (!isSetId(set)) throw new Error('Not a recording set.');
+  // Set 1 keeps the folder it always had; later sets get their own.
+  const dir = set === 's1' ? 'clips' : path.posix.join('clips', set);
+  await fs.mkdir(path.join(VOICE_DIR, dir), { recursive: true, mode: 0o700 });
   const ext = Object.entries(EXT).find(([k]) => mime.includes(k))?.[1] || 'webm';
-  const file = path.posix.join('clips', `${String(n).padStart(4, '0')}.${ext}`);
+  const file = path.posix.join(dir, `${String(n).padStart(4, '0')}.${ext}`);
   // A redo in a different container leaves no stale twin behind.
   for (const e of new Set(Object.values(EXT))) {
-    if (e !== ext) await fs.rm(path.join(VOICE_DIR, 'clips', `${String(n).padStart(4, '0')}.${e}`), { force: true });
+    if (e !== ext) await fs.rm(path.join(VOICE_DIR, dir, `${String(n).padStart(4, '0')}.${e}`), { force: true });
   }
   await fs.writeFile(path.join(VOICE_DIR, file), audio, { mode: 0o600 });
-  const clip: Clip = { n, text: line.text, file, mime, bytes: audio.length, at: new Date().toISOString(), ...(peak !== undefined ? { peakDb: peak } : {}) };
-  const clips = (await loadClips()).filter(c => c.n !== n);
+  const clip: Clip = {
+    n,
+    text: line.text,
+    file,
+    mime,
+    bytes: audio.length,
+    at: new Date().toISOString(),
+    set,
+    ...(peak !== undefined ? { peakDb: peak } : {}),
+    ...(gapDb !== undefined && Number.isFinite(gapDb) ? { gapDb: Math.round(gapDb) } : {}),
+  };
+  const clips = (await loadClips()).filter(c => !(c.n === n && c.set === set));
   clips.push(clip);
-  clips.sort((a, b) => a.n - b.n);
+  clips.sort((a, b) => (a.set! < b.set! ? -1 : a.set! > b.set! ? 1 : a.n - b.n));
   await writeJson(CLIPS_FILE, clips);
   return clip;
 }
@@ -156,6 +264,7 @@ export async function saveClip(n: number, audio: Buffer, mime: string, peak?: nu
  *  vault/.trash/voice/ so their sentences count as unread again. Returns how
  *  many were set aside. */
 export async function setAsideSilentClips(): Promise<{ checked: number; silent: number[] }> {
+  // (All sets.)
   const clips = await loadClips();
   const keep: Clip[] = [];
   const silent: number[] = [];
