@@ -1132,6 +1132,55 @@ function VaultLayout({ panels, footer }: { panels: Record<PanelId, React.ReactNo
 
 function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   const [isRecording, setIsRecording] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const pausedRef = useRef(false);
+  const [calm, setCalm] = useState(false);
+  const [justDone, setJustDone] = useState(false);
+  const [showWords, setShowWords] = useState<boolean>(() => readPref('mystory.calmWords', 'on') === 'on');
+  useEffect(() => writePref('mystory.calmWords', showWords ? 'on' : 'off'), [showWords]);
+  // Recorded time, not wall time: a pause does not count.
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!isRecording) return;
+    if (!paused) {
+      const t = setInterval(() => setElapsed(e => e + 1), 1000);
+      return () => clearInterval(t);
+    }
+  }, [isRecording, paused]);
+
+  // A phone that dims and locks its screen can stop the microphone mid-
+  // sentence. While recording, ask it to stay awake.
+  useEffect(() => {
+    if (!isRecording) return;
+    let lock: any = null;
+    const acquire = async () => {
+      try {
+        lock = await (navigator as any).wakeLock?.request('screen');
+      } catch {}
+    };
+    void acquire();
+    const again = () => document.visibilityState === 'visible' && void acquire();
+    document.addEventListener('visibilitychange', again);
+    return () => {
+      document.removeEventListener('visibilitychange', again);
+      void lock?.release?.().catch(() => {});
+    };
+  }, [isRecording]);
+
+  const pauseRecording = () => {
+    const r = mediaRecorderRef.current;
+    if (!r || r.state !== 'recording') return;
+    r.pause();
+    pausedRef.current = true;
+    setPaused(true);
+  };
+  const resumeRecording = () => {
+    const r = mediaRecorderRef.current;
+    if (!r || r.state !== 'paused') return;
+    r.resume();
+    pausedRef.current = false;
+    setPaused(false);
+  };
   const [transcript, setTranscript] = useState('');
   const [sessionName, setSessionName] = useState('');
   // Greek or English, never "detect": guessing the language wrong is the
@@ -1267,6 +1316,7 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
       lowpass.frequency.value = 7000;
       const node = new AudioWorkletNode(ctx, 'pcm16k');
       node.port.onmessage = e => {
+        if (pausedRef.current) return;
         if (ws.readyState === WebSocket.OPEN) ws.send(e.data);
         else if (ws.readyState === WebSocket.CONNECTING && queue.length < 600) queue.push(e.data);
       };
@@ -1678,6 +1728,8 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   const toggleRecording = async () => {
     if (isRecording) {
       setIsRecording(false);
+      setPaused(false);
+      pausedRef.current = false;
       stopLive();
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
@@ -1711,6 +1763,9 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
     }
 
     setIsRecording(true);
+    setPaused(false);
+    pausedRef.current = false;
+    setElapsed(0);
     setTranscript('');
     setArchiveLink(null);
     setArchiveError(null);
@@ -2024,6 +2079,120 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
         </div>
       )}
 
+      {calm &&
+        createPortal(
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Session"
+            tabIndex={-1}
+            onKeyDown={e => {
+              if (e.code === 'Space' && isRecording) {
+                e.preventDefault();
+                paused ? resumeRecording() : pauseRecording();
+              }
+            }}
+            ref={el => el?.focus()}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 60,
+              background: 'var(--bg, #140a0c)',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 28,
+              padding: '24px 16px',
+              outline: 'none',
+            }}
+          >
+            <div style={{ position: 'absolute', top: 16, right: 16, display: 'flex', gap: 10 }}>
+              <button className="btn btn-sm cut-sm" onClick={() => setShowWords(w => !w)} aria-pressed={showWords}>
+                {showWords ? 'Hide my words' : 'Show my words'}
+              </button>
+              {!isRecording && (
+                <button className="btn btn-sm cut-sm" onClick={() => setCalm(false)}>
+                  Close
+                </button>
+              )}
+            </div>
+
+            {!isRecording ? (
+              <>
+                <p style={{ fontSize: 'clamp(1.3rem, 3vw, 1.8rem)', textAlign: 'center', maxWidth: 640, margin: 0, lineHeight: 1.5 }}>
+                  {justDone
+                    ? 'Saved. It is being written out now — you can close this, or begin again.'
+                    : 'Take your time. Pauses are fine; everything is kept.'}
+                </p>
+                <button
+                  className="btn btn-primary cut-sm"
+                  style={{ minWidth: 220, fontSize: '1.2rem', padding: '18px 26px' }}
+                  onClick={() => {
+                    setJustDone(false);
+                    void toggleRecording();
+                  }}
+                >
+                  <span className="flex items-center gap-2 justify-center">
+                    <Mic className="w-5 h-5" />
+                    Begin
+                  </span>
+                </button>
+              </>
+            ) : (
+              <>
+                <p aria-live="polite" style={{ margin: 0, fontSize: '1.1rem', opacity: 0.85 }}>
+                  {paused ? 'Paused — take the time you need' : '● Recording'} ·{' '}
+                  {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}
+                </p>
+                <div style={{ width: 'min(420px, 90vw)' }}>
+                  <MicLevel stream={paused ? null : liveStream} />
+                </div>
+                <div className="flex gap-3 flex-wrap justify-center">
+                  <button
+                    className="btn cut-sm"
+                    style={{ minWidth: 160, fontSize: '1.05rem', padding: '14px 20px' }}
+                    onClick={() => (paused ? resumeRecording() : pauseRecording())}
+                  >
+                    {paused ? 'Carry on' : 'Pause'}
+                  </button>
+                  <button
+                    className="btn btn-primary cut-sm"
+                    style={{ minWidth: 160, fontSize: '1.05rem', padding: '14px 20px' }}
+                    onClick={() => {
+                      setJustDone(true);
+                      void toggleRecording();
+                    }}
+                  >
+                    I'm done
+                  </button>
+                </div>
+              </>
+            )}
+
+            {showWords && transcript.trim() && (
+              <p
+                style={{
+                  maxWidth: 820,
+                  maxHeight: '30vh',
+                  overflowY: 'auto',
+                  opacity: 0.6,
+                  textAlign: 'center',
+                  lineHeight: 1.6,
+                  margin: 0,
+                  whiteSpace: 'pre-wrap',
+                }}
+              >
+                {transcript.length > 600 ? '…' + transcript.slice(-600) : transcript}
+              </p>
+            )}
+            <p className="fhint" style={{ position: 'absolute', bottom: 16, margin: 0 }}>
+              {isRecording ? 'Space pauses and carries on.' : 'The recording is saved as you speak.'}
+            </p>
+          </div>,
+          document.body,
+        )}
+
       {interrupted.length > 0 && (
         <div className="callout warn mb-6">
           <span className="cd" />
@@ -2048,6 +2217,15 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
           </span>
         </div>
       )}
+
+      <div className="flex justify-start" style={{ marginBottom: 'var(--gap)' }}>
+        <button className="btn btn-primary cut-sm" disabled={isRecording} onClick={() => setCalm(true)}>
+          <span className="flex items-center gap-2">
+            <Mic className="w-4 h-4" />
+            Start a session
+          </span>
+        </button>
+      </div>
 
       <VaultLayout
         panels={{
