@@ -79,6 +79,11 @@ agent adding a translation cannot accidentally blank the dates.
 | `GET /api/words`, `PUT /api/words` | the writer's word list, `{words:[{term, note?}]}` |
 | `POST /api/words/suggest` | names and unusual words found in the entries, each checked to really occur there |
 | `POST /api/vault/entries/:id/retranscribe` | `{language: "el"\|"en", style?}`: transcribes the saved recording again; the old entry is copied to `.trash` first |
+| `WS /ws/live?lang=el\|en` | send 16 kHz mono PCM16 as binary frames; receive `{type:"text"}`, `{type:"state"}`; send `{"type":"stop"}` to finish |
+| `POST /api/recordings/:sid/piece?seq=n` | appends piece *n* of a recording in progress (raw body) |
+| `GET /api/recordings/interrupted`, `POST /api/recordings/:sid/recover` | recordings whose pieces stopped arriving, and turning one into an entry |
+| `GET /api/voice`, `POST /api/voice/script`, `POST /api/voice/clips/:n` | the reading script, generating more of it, and saving the clip for line *n* |
+| `POST /api/voice/measure`, `GET /api/voice/measure`, `POST /api/voice/apply` | score every transcription engine on the clips (background job), and set the best three as the transcription slots |
 | `POST /api/chapters/plan` | `{ids[]}` → the chapter split into parts that fit one model call, with any parts already saved. Calling it again resumes |
 | `POST /api/chapters/:id/parts/:n` | drafts part *n* (1-based) and saves it before answering. Draft the parts in order: each one continues from the last |
 | `GET /api/chapters`, `GET /api/chapters/:id` | saved chapters, and one chapter with its parts and sources |

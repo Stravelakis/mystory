@@ -36,6 +36,11 @@ import {
   saveAudio,
   findAudio,
   backupEntry,
+  appendPartial,
+  listPartials,
+  readPartial,
+  dropPartial,
+  isValidSid,
   newId,
   isValidId,
   VAULT_DIR,
@@ -71,6 +76,7 @@ import { NotConnected } from './google.ts';
 import {
   chat,
   transcribe,
+  transcriptionCandidates,
   probe,
   readRouting,
   isLocalOnly,
@@ -90,6 +96,8 @@ import { liveTranslateSpeech } from './live.ts';
 import { draftEpisode, proposeEpisodes, render as renderForEpisode } from './episodes.ts';
 import { repair, checkUpdate } from './maintenance.ts';
 import { loadWords, saveWords, wordsHint, keepIfPresent } from './words.ts';
+import { openLiveTranscription } from './live.ts';
+import { loadScript, loadClips, appendScript, cleanScript, saveClip, readClip, wordErrorRate, sampleClips } from './voice.ts';
 import { planParts, openChapter, readChapter, savePart, listChapters, isChapterId } from './chapters.ts';
 import { timelineKey } from './vault.ts';
 
@@ -186,17 +194,67 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
   const wss = new WebSocketServer({ noServer: true });
+  // Words while speaking: binary PCM16 in, transcript fragments out.
+  const liveWss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
 
   server.on('upgrade', async (request, socket, head) => {
-    if (request.url !== '/ws/journal') return;
+    const pathname = (request.url || '').split('?')[0];
+    if (pathname !== '/ws/journal' && pathname !== '/ws/live') return;
     if (!(await isAuthed(request))) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      wss.emit('connection', ws, request);
+    const target = pathname === '/ws/live' ? liveWss : wss;
+    target.handleUpgrade(request, socket, head, (ws) => {
+      target.emit('connection', ws, request);
     });
+  });
+
+  liveWss.on('connection', async (ws, request: any) => {
+    const say = (m: object) => {
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(m));
+    };
+    const url = new URL(request.url || '/', 'http://x');
+    const language = url.searchParams.get('lang') === 'en' ? 'en' : 'el';
+
+    const config = await loadConfig();
+    if (isLocalOnly(config) || !hasCloudConsent(config)) {
+      say({ type: 'unavailable', message: 'Words while you speak use Gemini Live, a cloud service. Tick "I understand where my words go" in Settings to use them.' });
+      return ws.close();
+    }
+    const provider = resolveProviders(config).find(p => p.kind === 'gemini-live');
+    if (!provider) {
+      say({ type: 'unavailable', message: 'Words while you speak need a Google Gemini key (Settings → Provider keys).' });
+      return ws.close();
+    }
+    // The transcription slot's Live model if one is assigned, else the default.
+    const model =
+      slotsFor(config, 'transcribe').find(s => s.providerId === provider.id)?.model || provider.stt[0];
+
+    const stream = openLiveTranscription({
+      apiKey: provider.apiKey,
+      model,
+      language,
+      onText: text => say({ type: 'text', text }),
+      onState: (state, detail) => {
+        if (state === 'failed') console.warn(`[live words] ${model} gave up: ${detail}`);
+        say({ type: 'state', state });
+      },
+    });
+    console.info(`[live words] ${provider.id}/${model} (${language})`);
+
+    ws.on('message', async (data, isBinary) => {
+      if (isBinary) return stream.send(Buffer.from(data as Buffer));
+      try {
+        if (JSON.parse(data.toString()).type === 'stop') {
+          await stream.finish();
+          say({ type: 'done' });
+          ws.close();
+        }
+      } catch {}
+    });
+    ws.on('close', () => stream.close());
   });
 
   // A long journal entry is easily past the 100kb default.
@@ -278,80 +336,149 @@ async function startServer() {
     res.status(401).json({ success: false, error: 'Locked.' });
   });
 
-  const upload = multer({ limits: { fileSize: 10 * 1024 * 1024 } });
+  // 10 MB was about 10-20 minutes of speech, and a longer session was refused
+  // at upload and never reached the vault. Recordings are made at 64 kbps
+  // (about half a megabyte a minute), so this allows several hours.
+  const upload = multer({ limits: { fileSize: 400 * 1024 * 1024 } });
+
+  /* ---- recordings in progress ------------------------------------------- */
+
+  app.post(
+    '/api/recordings/:sid/piece',
+    express.raw({ type: () => true, limit: '20mb' }),
+    async (req, res) => {
+      const seq = Number(req.query.seq);
+      if (!isValidSid(req.params.sid) || !Number.isInteger(seq) || seq < 0 || !Buffer.isBuffer(req.body)) {
+        return res.status(400).json({ success: false, error: 'Bad piece.' });
+      }
+      try {
+        const mime = String(req.query.mime || req.headers['content-type'] || 'audio/webm').slice(0, 80);
+        const info = await appendPartial(req.params.sid, seq, req.body, mime);
+        res.json({ success: true, bytes: info.bytes });
+      } catch (e: any) {
+        res.status(e?.expected !== undefined ? 409 : 500).json({ success: false, error: e.message, expected: e?.expected });
+      }
+    },
+  );
+
+  app.get('/api/recordings/interrupted', async (_req, res) => {
+    res.json({ success: true, recordings: await listPartials() });
+  });
+
+  /** Turns an interrupted recording into an entry, exactly as if it had been
+   *  uploaded when it ended. */
+  app.post('/api/recordings/:sid/recover', async (req, res) => {
+    const part = await readPartial(req.params.sid);
+    if (!part) return res.status(404).json({ success: false, error: 'That recording is not here any more.' });
+    const r = await processRecording(part.buffer, part.mime, req.body || {});
+    if (r.json?.entryId) await dropPartial(req.params.sid).catch(() => {});
+    res.status(r.status).json(r.json);
+  });
+
+  /** Everything after an upload arrives: the recording to disk first, then
+   *  transcription, tidying and the entry. Shared by the upload route and by
+   *  recovering a recording whose session was interrupted. */
+  async function processRecording(
+    buffer: Buffer,
+    mime: string,
+    body: any,
+  ): Promise<{ status: number; json: any }> {
+    const reply = (status: number, json: any) => ({ status, json });
+      // The recording goes to disk FIRST, and an entry is created to hold it.
+      // Everything after this point can fail without costing you the recording.
+      const id = newId();
+      let audio: string | undefined;
+      try {
+        audio = await saveAudio(id, buffer, mime);
+        await saveEntry({ id, title: 'Untitled recording', text: '', audio });
+      } catch (err: any) {
+        console.error('Vault write failed before transcription:', err);
+        return reply(500, { success: false, error: 'Could not write to the vault: ' + err.message });
+      }
+
+      try {
+        const config = await loadConfig();
+        const words = await loadWords();
+        const result = await transcribe(config, buffer, mime, {
+          engine: body?.engine,
+          language: body?.language === 'en' ? 'en' : 'el',
+          words: wordsHint(words),
+        });
+
+        // What came off the recording, before anything tidied it.
+        const spoken = result.text;
+        let transcript = spoken;
+        let verbatim: string | undefined;
+        let tidiedBy: string | undefined;
+
+        // "corrected" is the default, because reading back your own speech with
+        // every "um" in it is its own small discouragement. The raw version is
+        // always kept: STANDARDS §1, the recording is sacred, and so is what was
+        // actually said.
+        const style = body?.style === 'verbatim' ? 'verbatim' : 'corrected';
+        if (style === 'corrected' && spoken.trim().length > 20) {
+          try {
+            const tidy = await tidyTranscript(config, spoken, words);
+            if (tidy.text.trim()) {
+              transcript = tidy.text;
+              verbatim = spoken;
+              tidiedBy = `${tidy.provider}/${tidy.model}`;
+            }
+          } catch (err: any) {
+            // Failing to tidy costs the tidying, never the transcript.
+            console.warn('Transcript cleanup failed, keeping it verbatim:', err?.message || err);
+          }
+        }
+        const entry = await saveEntry({ id, text: transcript, verbatim });
+        return reply(200, {
+          success: true,
+          transcript,
+          verbatim,
+          style,
+          tidiedBy,
+          entryId: id,
+          entry,
+          engine: { provider: result.provider, model: result.model, local: result.local },
+        });
+      } catch (err: any) {
+        console.error('Transcription Error:', err);
+        // The words shown live while speaking are a rougher transcript, but a
+        // transcript: keep them rather than leave the entry empty. Transcribe
+        // again can replace them later.
+        const liveText = typeof body?.liveText === 'string' ? body.liveText.trim().slice(0, 200_000) : '';
+        if (liveText) {
+          try {
+            const entry = await saveEntry({ id, text: liveText });
+            return reply(200, {
+              success: true,
+              transcript: liveText,
+              entryId: id,
+              entry,
+              fromLive: true,
+              note: `The final pass failed (${err.message || err}), so the words shown while you spoke were kept. Use Transcribe again later for a careful version.`,
+            });
+          } catch {}
+        }
+        // 200, not 500: the recording was kept, so this is a partial success and
+        // the client needs the id to offer a retry.
+        return reply(200, {
+          success: false,
+          entryId: id,
+          audioKept: Boolean(audio),
+          error: err.message || err.toString(),
+        });
+      }
+  }
 
   app.post('/api/journal/transcribe-audio', upload.single('audio'), async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ success: false, error: 'No audio file uploaded.' });
     }
-
-    // The recording goes to disk FIRST, and an entry is created to hold it.
-    // Everything after this point can fail without costing you the recording.
-    const id = newId();
-    let audio: string | undefined;
-    try {
-      audio = await saveAudio(id, req.file.buffer, req.file.mimetype || 'audio/webm');
-      await saveEntry({ id, title: 'Untitled recording', text: '', audio });
-    } catch (err: any) {
-      console.error('Vault write failed before transcription:', err);
-      return res.status(500).json({ success: false, error: 'Could not write to the vault: ' + err.message });
-    }
-
-    try {
-      const config = await loadConfig();
-      const words = await loadWords();
-      const result = await transcribe(config, req.file.buffer, req.file.mimetype || 'audio/webm', {
-        engine: req.body?.engine,
-        language: req.body?.language === 'en' ? 'en' : 'el',
-        words: wordsHint(words),
-      });
-
-      // What came off the recording, before anything tidied it.
-      const spoken = result.text;
-      let transcript = spoken;
-      let verbatim: string | undefined;
-      let tidiedBy: string | undefined;
-
-      // "corrected" is the default, because reading back your own speech with
-      // every "um" in it is its own small discouragement. The raw version is
-      // always kept: STANDARDS §1, the recording is sacred, and so is what was
-      // actually said.
-      const style = req.body?.style === 'verbatim' ? 'verbatim' : 'corrected';
-      if (style === 'corrected' && spoken.trim().length > 20) {
-        try {
-          const tidy = await tidyTranscript(config, spoken, words);
-          if (tidy.text.trim()) {
-            transcript = tidy.text;
-            verbatim = spoken;
-            tidiedBy = `${tidy.provider}/${tidy.model}`;
-          }
-        } catch (err: any) {
-          // Failing to tidy costs the tidying, never the transcript.
-          console.warn('Transcript cleanup failed, keeping it verbatim:', err?.message || err);
-        }
-      }
-      const entry = await saveEntry({ id, text: transcript, verbatim });
-      res.json({
-        success: true,
-        transcript,
-        verbatim,
-        style,
-        tidiedBy,
-        entryId: id,
-        entry,
-        engine: { provider: result.provider, model: result.model, local: result.local },
-      });
-    } catch (err: any) {
-      console.error('Transcription Error:', err);
-      // 200, not 500: the recording was kept, so this is a partial success and
-      // the client needs the id to offer a retry.
-      res.json({
-        success: false,
-        entryId: id,
-        audioKept: Boolean(audio),
-        error: err.message || err.toString(),
-      });
-    }
+    const r = await processRecording(req.file.buffer, req.file.mimetype || 'audio/webm', req.body);
+    // The whole recording is now in the vault, so the pieces sent while it
+    // was being made are no longer needed.
+    if (r.json?.entryId && typeof req.body?.sid === 'string') await dropPartial(req.body.sid, req.file.size).catch(() => {});
+    res.status(r.status).json(r.json);
   });
 
   /* ---- vault ------------------------------------------------------------- */
@@ -712,6 +839,139 @@ ${corpus}
     } catch (e: any) {
       res.status(500).json({ success: false, error: e.message || String(e) });
     }
+  });
+
+  /* --- Your voice (voice.ts) ------------------------------------------------ */
+
+  app.get('/api/voice', async (_req, res) => {
+    const [script, clips] = await Promise.all([loadScript(), loadClips()]);
+    const seconds = clips.reduce((s, c) => s + c.bytes, 0) / 8000; // 64 kbps
+    res.json({ success: true, script, clips: clips.map(c => c.n), minutes: Math.round(seconds / 60) });
+  });
+
+  /** Writes more reading sentences, in batches, into the script. */
+  app.post('/api/voice/script', async (req, res) => {
+    const language = req.body?.language === 'en' ? 'en' : 'el';
+    const want = Math.max(20, Math.min(500, Number(req.body?.count) || 100));
+    try {
+      const config = await loadConfig();
+      const words = await loadWords();
+      const added: { text: string; language: 'el' | 'en' }[] = [];
+      for (let round = 0; round < 12 && added.length < want; round++) {
+        const batch = Math.min(60, want - added.length);
+        const sample = words.length ? words.slice(round * 15, round * 15 + 15).concat(words.slice(0, 5)) : [];
+        const result = await chat(config, {
+          task: 'title',
+          temperature: 0.9,
+          json: true,
+          maxTokens: 6000,
+          validate: t => cleanScript(parseJsonAnswer(t), language).length > 0,
+          prompt: `Write ${batch} different sentences for someone to read aloud, one at a time, so a speech recogniser can learn their voice. Language: ${language === 'el' ? 'Greek (Modern Greek, natural everyday speech, with correct accents)' : 'English'}.
+
+Make them:
+- calm and ordinary: home, food, weather, walks, work, memories of places, plans, small talk. NOT sad, violent, or about trauma or abuse.
+- 6 to 18 words each, easy to say in one breath
+- varied: questions, numbers and dates said as words, short and longer sentences, many different sounds and words
+${sample.length ? `- about a third of them should naturally include one of these names or words (spelled exactly like this): ${sample.map(w => w.term).join(', ')}` : ''}
+
+Return ONLY JSON: {"sentences":["...", "..."]}`,
+        });
+        for (const l of cleanScript(parseJsonAnswer(result.text), language)) {
+          if (!added.some(a => a.text === l.text)) added.push({ text: l.text, language });
+        }
+      }
+      const script = await appendScript(added.map((a, i) => ({ n: i, ...a })));
+      res.json({ success: true, added: added.length, script });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message || String(e) });
+    }
+  });
+
+  app.post('/api/voice/clips/:n', upload.single('audio'), async (req, res) => {
+    const n = Number(req.params.n);
+    if (!req.file || !Number.isInteger(n) || n < 1) return res.status(400).json({ success: false, error: 'No clip.' });
+    try {
+      const clip = await saveClip(n, req.file.buffer, req.file.mimetype || 'audio/webm');
+      res.json({ success: true, clip: { n: clip.n, bytes: clip.bytes } });
+    } catch (e: any) {
+      res.status(400).json({ success: false, error: e.message || String(e) });
+    }
+  });
+
+  /* Measuring takes minutes (every engine × every sample clip, one call at a
+     time to stay inside free-tier limits), so it runs in the background and
+     the page polls for progress. One measurement at a time. */
+  let measure: {
+    running: boolean;
+    done: number;
+    total: number;
+    results: { providerId: string; model: string; label: string; wer: number | null; seconds: number; failures: number; heard: { ref: string; got: string }[] }[];
+    error?: string;
+  } | null = null;
+
+  app.get('/api/voice/measure', (_req, res) => res.json({ success: true, measure }));
+
+  app.post('/api/voice/measure', async (req, res) => {
+    if (measure?.running) return res.json({ success: true, measure });
+    const config = await loadConfig();
+    const clips = sampleClips(await loadClips(), Math.max(5, Math.min(40, Number(req.body?.sample) || 15)));
+    if (clips.length < 5) return res.status(400).json({ success: false, error: 'Read at least 5 sentences first.' });
+    const engines = transcriptionCandidates(config);
+    if (engines.length === 0) return res.status(400).json({ success: false, error: 'No transcription engine is set up.' });
+    const script = await loadScript();
+    measure = {
+      running: true,
+      done: 0,
+      total: engines.length * clips.length,
+      results: engines.map(e => ({ ...e, wer: null, seconds: 0, failures: 0, heard: [] })),
+    };
+    res.json({ success: true, measure });
+
+    const m = measure;
+    void (async () => {
+      for (const r of m.results) {
+        let errSum = 0;
+        let scored = 0;
+        for (const c of clips) {
+          const language = script.find(l => l.n === c.n)?.language || 'el';
+          const t0 = Date.now();
+          try {
+            // No word list and no tidying: this measures what each engine
+            // hears, so the comparison is fair.
+            const out = await transcribe(config, await readClip(c), c.mime, { language, only: { providerId: r.providerId, model: r.model } });
+            errSum += Math.min(1, wordErrorRate(c.text, out.text));
+            scored++;
+            if (r.heard.length < 3) r.heard.push({ ref: c.text, got: out.text });
+          } catch {
+            r.failures++;
+          }
+          r.seconds += (Date.now() - t0) / 1000;
+          // Free tiers count requests per minute; a short gap keeps this from
+          // using them up and failing engines for the wrong reason.
+          await new Promise(res => setTimeout(res, 1200));
+          r.wer = scored + r.failures ? (errSum + r.failures) / (scored + r.failures) : null;
+          m.done++;
+        }
+        r.seconds = scored + r.failures ? r.seconds / (scored + r.failures) : 0;
+        // A clip it failed on counts as every word wrong: an engine that
+        // often does not answer is not the one to rely on.
+        r.wer = scored + r.failures ? (errSum + r.failures) / (scored + r.failures) : null;
+      }
+      m.running = false;
+    })().catch(e => {
+      m.running = false;
+      m.error = e?.message || String(e);
+    });
+  });
+
+  /** Puts the engines in the order the measurement ranked them. */
+  app.post('/api/voice/apply', async (req, res) => {
+    const order: string[] = Array.isArray(req.body?.order) ? req.body.order.filter((x: unknown) => typeof x === 'string' && x.includes('::')).slice(0, 3) : [];
+    if (order.length === 0) return res.status(400).json({ success: false, error: 'Nothing to apply.' });
+    const update: Record<string, string> = {};
+    ['MODEL_TRANSCRIBE_1', 'MODEL_TRANSCRIBE_2', 'MODEL_TRANSCRIBE_3'].forEach((k, i) => (update[k] = order[i] || ''));
+    await saveConfig(update);
+    res.json({ success: true });
   });
 
   /* --- Chapters in parts (chapters.ts) -------------------------------------

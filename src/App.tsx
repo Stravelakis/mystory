@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Settings,
   Mic,
@@ -811,6 +812,59 @@ function micConstraints(deviceId: string, cleanup: string): MediaTrackConstraint
   };
 }
 
+/* Words while speaking: the microphone, resampled to 16 kHz PCM16 in an
+   AudioWorklet, streamed to /ws/live. A low-pass filter sits in front of it
+   (see startLive) so the resampling does not fold high frequencies into the
+   speech band. */
+const PCM16K_WORKLET = `
+class Pcm16k extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.ratio = sampleRate / 16000;
+    this.pos = 0;
+    this.last = 0;
+    this.out = new Int16Array(1600); // 100 ms
+    this.n = 0;
+  }
+  push(v) {
+    const c = Math.max(-1, Math.min(1, v));
+    this.out[this.n++] = c < 0 ? c * 0x8000 : c * 0x7fff;
+    if (this.n === this.out.length) {
+      this.port.postMessage(this.out.buffer.slice(0));
+      this.n = 0;
+    }
+  }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (!ch) return true;
+    let pos = this.pos;
+    const at = k => (k < 0 ? this.last : ch[k]);
+    while (Math.floor(pos) + 1 < ch.length) {
+      const i = Math.floor(pos);
+      this.push(at(i) + (at(i + 1) - at(i)) * (pos - i));
+      pos += this.ratio;
+    }
+    this.last = ch[ch.length - 1];
+    this.pos = pos - ch.length;
+    return true;
+  }
+}
+registerProcessor('pcm16k', Pcm16k);
+`;
+let pcmWorkletUrl = '';
+const workletUrl = () =>
+  pcmWorkletUrl || (pcmWorkletUrl = URL.createObjectURL(new Blob([PCM16K_WORKLET], { type: 'text/javascript' })));
+
+const LIVE_WORDS_KEY = 'mystory.liveWords';
+const LIVE_WORDS: PickerGroup[] = [
+  {
+    options: [
+      { value: 'on', label: 'On — words appear as I speak' },
+      { value: 'off', label: 'Off — the transcript comes when I stop' },
+    ],
+  },
+];
+
 /** A live level bar, so "is it hearing me?" is answered by looking. */
 function MicLevel({ stream }: { stream: MediaStream | null }) {
   const [level, setLevel] = useState(0);
@@ -1100,6 +1154,149 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   const [cleanup, setCleanup] = useState<string>(() => readPref(CLEANUP_KEY, 'off'));
   const [mics, setMics] = useState<{ value: string; label: string }[]>([]);
   const [liveStream, setLiveStream] = useState<MediaStream | null>(null);
+  const [liveWords, setLiveWords] = useState<string>(() => readPref(LIVE_WORDS_KEY, 'on'));
+  useEffect(() => writePref(LIVE_WORDS_KEY, liveWords), [liveWords]);
+  // 'listening' | 'reconnecting' | 'failed' | 'unavailable'
+  const [liveState, setLiveState] = useState<string | null>(null);
+  const [liveNote, setLiveNote] = useState('');
+  const liveRef = useRef<{ ws: WebSocket; ctx: AudioContext } | null>(null);
+  const liveTextRef = useRef('');
+
+  // Pieces of the recording, sent while it is being made (vault.ts, "in
+  // progress"). One at a time and in order; a failed send is retried, and if
+  // the network is gone the whole recording still goes up at the end.
+  const sidRef = useRef('');
+  const pieceChain = useRef<Promise<void>>(Promise.resolve());
+  const pieceSeq = useRef(0);
+  const sendPiece = (blob: Blob, mime: string) => {
+    const sid = sidRef.current;
+    const seq = pieceSeq.current++;
+    pieceChain.current = pieceChain.current.then(async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const r = await fetch(`/api/recordings/${sid}/piece?seq=${seq}&mime=${encodeURIComponent(mime)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: blob,
+          });
+          if (r.ok || r.status === 409) return;
+        } catch {}
+        await new Promise(res => setTimeout(res, 1500 * (attempt + 1)));
+      }
+    });
+  };
+
+  // Recordings from a session that never finished (a crash, a closed tab).
+  const [interrupted, setInterrupted] = useState<{ sid: string; bytes: number; started: string; updated: string }[]>([]);
+  const [recovering, setRecovering] = useState<string | null>(null);
+  useEffect(() => {
+    void (async () => {
+      try {
+        const d = await (await fetch('/api/recordings/interrupted')).json();
+        if (d.success) setInterrupted(d.recordings);
+      } catch {}
+    })();
+  }, []);
+  const recover = async (sid: string) => {
+    setRecovering(sid);
+    try {
+      const d = await (
+        await fetch(`/api/recordings/${sid}/recover`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ language, style: styleRef.current, engine: engineRef.current }),
+        })
+      ).json();
+      if (!d.entryId) throw new Error(d.error || 'The recording could not be recovered.');
+      setInterrupted(list => list.filter(x => x.sid !== sid));
+      if (d.success) {
+        setEntryId(d.entryId);
+        setTranscript(d.transcript || '');
+        setVerbatim(d.verbatim || '');
+        triggerAlert('Recovered, transcribed and saved to the vault.', 'success');
+      } else {
+        triggerAlert(`The recording is saved to the vault, but transcription failed: ${d.error}. Use Transcribe again later.`, 'error');
+      }
+      void refreshEntries();
+    } catch (e: any) {
+      triggerAlert(e.message || String(e), 'error');
+    } finally {
+      setRecovering(null);
+    }
+  };
+
+  const startLive = async (stream: MediaStream) => {
+    liveTextRef.current = '';
+    setLiveNote('');
+    setLiveState('reconnecting');
+    const ws = new WebSocket(
+      `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/live?lang=${language === 'en' ? 'en' : 'el'}`,
+    );
+    ws.binaryType = 'arraybuffer';
+    const queue: ArrayBuffer[] = [];
+    ws.onopen = () => {
+      for (const b of queue.splice(0)) ws.send(b);
+    };
+    ws.onmessage = ev => {
+      let d: any;
+      try {
+        d = JSON.parse(String(ev.data));
+      } catch {
+        return;
+      }
+      if (d.type === 'text') {
+        const t = String(d.text || '').trim();
+        if (!t) return;
+        liveTextRef.current = liveTextRef.current ? `${liveTextRef.current} ${t}` : t;
+        setTranscript(liveTextRef.current);
+      } else if (d.type === 'state') {
+        setLiveState(d.state === 'open' ? 'listening' : d.state);
+      } else if (d.type === 'unavailable') {
+        setLiveState('unavailable');
+        setLiveNote(d.message || '');
+      }
+    };
+    ws.onerror = () => setLiveState(s => (s === 'unavailable' ? s : 'failed'));
+
+    const ctx = new AudioContext();
+    try {
+      await ctx.audioWorklet.addModule(workletUrl());
+      const src = ctx.createMediaStreamSource(stream);
+      const lowpass = ctx.createBiquadFilter();
+      lowpass.type = 'lowpass';
+      lowpass.frequency.value = 7000;
+      const node = new AudioWorkletNode(ctx, 'pcm16k');
+      node.port.onmessage = e => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(e.data);
+        else if (ws.readyState === WebSocket.CONNECTING && queue.length < 600) queue.push(e.data);
+      };
+      // A silent path to the speakers keeps the graph running; nothing is heard.
+      const mute = ctx.createGain();
+      mute.gain.value = 0;
+      src.connect(lowpass).connect(node).connect(mute).connect(ctx.destination);
+    } catch (e) {
+      console.error('Live words could not start:', e);
+      setLiveState('failed');
+    }
+    liveRef.current = { ws, ctx };
+  };
+
+  const stopLive = () => {
+    const l = liveRef.current;
+    if (!l) return;
+    liveRef.current = null;
+    // Ask for the end of the transcript, give it a moment, then let go.
+    try {
+      if (l.ws.readyState === WebSocket.OPEN) l.ws.send(JSON.stringify({ type: 'stop' }));
+    } catch {}
+    setTimeout(() => {
+      try {
+        l.ws.close();
+      } catch {}
+      setLiveState(null);
+    }, 8000);
+    void l.ctx.close().catch(() => {});
+  };
   useEffect(() => writePref(MIC_KEY, micId), [micId]);
   useEffect(() => writePref(CLEANUP_KEY, cleanup), [cleanup]);
 
@@ -1153,7 +1350,6 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   const [recovered, setRecovered] = useState(false);
   const lastSavedRef = useRef('');
 
-  const recognitionRef = useRef<any>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -1482,11 +1678,7 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   const toggleRecording = async () => {
     if (isRecording) {
       setIsRecording(false);
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop();
-        } catch (e) {}
-      }
+      stopLive();
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
       }
@@ -1524,35 +1716,11 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
     setArchiveError(null);
     audioChunksRef.current = [];
 
-    // A. Web Speech API — fast interim text on screen
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      recognitionRef.current = new SpeechRecognition();
-      recognitionRef.current.continuous = true;
-      recognitionRef.current.interimResults = true;
-      recognitionRef.current.lang = language === 'en' ? 'en-US' : 'el-GR';
-
-      recognitionRef.current.onresult = (event: any) => {
-        let finalResult = '';
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) finalResult += event.results[i][0].transcript;
-        }
-        if (finalResult) {
-          setTranscript(prev => {
-            const cleanedPrev = prev.trim();
-            const cleanedNew = finalResult.trim();
-            if (cleanedPrev.endsWith(cleanedNew)) return prev;
-            return cleanedPrev ? cleanedPrev + ' ' + cleanedNew : cleanedNew;
-          });
-        }
-      };
-      recognitionRef.current.onerror = (e: any) => console.error('Speech Recognition Error:', e.error);
-      try {
-        recognitionRef.current.start();
-      } catch (e) {
-        console.error('SpeechRecognition start error:', e);
-      }
-    }
+    // A. Words while speaking, through Gemini Live (optional). This replaced
+    // the browser's own speech recognition, which does not run in the desktop
+    // app at all, and in Chrome sent the voice to Google whether or not cloud
+    // use had been agreed to.
+    if (liveWords === 'on') void startLive(stream);
 
     // B. MediaRecorder — the high-quality pass that actually gets transcribed
     try {
@@ -1573,11 +1741,20 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
           ? preferred.find(t => MediaRecorder.isTypeSupported(t))
           : undefined;
 
-      const mediaRecorder = supported ? new MediaRecorder(stream, { mimeType: supported }) : new MediaRecorder(stream);
+      // 64 kbps Opus: clear speech at about half a megabyte a minute, so a long
+      // session stays well inside every upload and transcription limit.
+      const recOpts: MediaRecorderOptions = { audioBitsPerSecond: 64000, ...(supported ? { mimeType: supported } : {}) };
+      const mediaRecorder = new MediaRecorder(stream, recOpts);
       mediaRecorderRef.current = mediaRecorder;
+      sidRef.current = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+      pieceSeq.current = 0;
+      pieceChain.current = Promise.resolve();
 
       mediaRecorder.ondataavailable = event => {
-        if (event.data && event.data.size > 0) audioChunksRef.current.push(event.data);
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+          sendPiece(event.data, mediaRecorder.mimeType || supported || 'audio/webm');
+        }
       };
 
       mediaRecorder.onstop = async () => {
@@ -1593,12 +1770,24 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
         formData.append('engine', engineRef.current);
         formData.append('language', languageRef.current);
         formData.append('style', styleRef.current);
+        if (liveTextRef.current) formData.append('liveText', liveTextRef.current);
+        formData.append('sid', sidRef.current);
         const ext = recordedType.includes('mp4') ? 'm4a' : recordedType.includes('ogg') ? 'ogg' : 'webm';
         formData.append('audio', audioBlob, `recording.${ext}`);
 
         try {
-          const res = await fetch('/api/journal/transcribe-audio', { method: 'POST', body: formData });
-          const data = await res.json();
+          // Retried, because a phone on the edge of its Wi-Fi drops a request
+          // now and then. The pieces already sent are the fallback.
+          let res: Response | null = null;
+          for (let attempt = 0; attempt < 3 && !res; attempt++) {
+            try {
+              res = await fetch('/api/journal/transcribe-audio', { method: 'POST', body: formData });
+            } catch (e) {
+              if (attempt === 2) throw e;
+              await new Promise(r => setTimeout(r, 3000 * (attempt + 1)));
+            }
+          }
+          const data = await res!.json();
           // The server has already written the recording and an entry to hold
           // it, so adopt that id whether or not the transcription worked.
           if (data.entryId) setEntryId(data.entryId);
@@ -1607,6 +1796,7 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
             setVerbatim(data.verbatim || '');
             setShowVerbatim(false);
             setSavedAt(data.entry?.updated || new Date().toISOString());
+            if (data.note) triggerAlert(data.note, 'info');
             await handleAutoArchive(data.transcript, data.entryId);
           } else {
             triggerAlert(
@@ -1624,7 +1814,8 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
         }
       };
 
-      mediaRecorder.start();
+      // A piece every five seconds goes to the server while you speak.
+      mediaRecorder.start(5000);
     } catch (err) {
       console.error('MediaRecorder start failed:', err);
       stopStream();
@@ -1833,6 +2024,31 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
         </div>
       )}
 
+      {interrupted.length > 0 && (
+        <div className="callout warn mb-6">
+          <span className="cd" />
+          <span className="flex flex-col gap-2">
+            <b>{interrupted.length === 1 ? 'A recording was interrupted.' : `${interrupted.length} recordings were interrupted.`}</b>
+            <span>What was said before it stopped is safe. Recover it to turn it into an entry.</span>
+            {interrupted.map(r => (
+              <span key={r.sid} className="flex items-center gap-3 flex-wrap">
+                <span>
+                  {new Date(r.started).toLocaleString()} ·{' '}
+                  {(() => {
+                    // From when the pieces started and stopped arriving.
+                    const secs = (Date.parse(r.updated) - Date.parse(r.started)) / 1000 + 5;
+                    return secs < 60 ? `${Math.round(secs)} seconds` : `about ${Math.round(secs / 60)} min`;
+                  })()}
+                </span>
+                <button className="btn btn-sm cut-sm" disabled={recovering !== null} onClick={() => void recover(r.sid)}>
+                  {recovering === r.sid ? 'Recovering…' : 'Recover it'}
+                </button>
+              </span>
+            ))}
+          </span>
+        </div>
+      )}
+
       <VaultLayout
         panels={{
           vault: (
@@ -1878,6 +2094,17 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
                   Prompt me for more
                 </button>
                 {!wsReady && <span className="fhint">Companion offline — reconnecting…</span>}
+              {isRecording && liveState && (
+                <span className="fhint" role="status" style={{ margin: 0 }}>
+                  {liveState === 'listening'
+                    ? '● Listening'
+                    : liveState === 'reconnecting'
+                      ? 'Connecting the live words… the recording itself is safe'
+                      : liveState === 'unavailable'
+                        ? liveNote
+                        : 'Live words stopped — the recording carries on and is transcribed when you stop'}
+                </span>
+              )}
               </div>
             </Frame>
           ),
@@ -1906,6 +2133,13 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
                   <label htmlFor="pick-cleanup">Sound cleanup</label>
                   <Picker id="pick-cleanup" value={cleanup} onChange={setCleanup} groups={CLEANUP} />
                   <span className="fhint">Off gives a good microphone's sound to the transcriber untouched.</span>
+                </div>
+                <div className="field">
+                  <label htmlFor="pick-live">Words while I speak</label>
+                  <Picker id="pick-live" value={liveWords} onChange={setLiveWords} groups={LIVE_WORDS} />
+                  <span className="fhint">
+                    Either way, the full recording is saved and gets a careful second pass when you stop.
+                  </span>
                 </div>
                 <div className="field">
                   <label htmlFor="pick-style">How to write it down</label>
@@ -3146,6 +3380,367 @@ function WordsPanel() {
   );
 }
 
+/* =============================================================================
+   YOUR VOICE (voice.ts) — read sentences aloud so the app learns how you
+   sound, then measure which engine hears you best.
+   ========================================================================== */
+
+interface ScriptLine {
+  n: number;
+  text: string;
+  language: 'el' | 'en';
+}
+interface MeasureResult {
+  providerId: string;
+  model: string;
+  label: string;
+  wer: number | null;
+  seconds: number;
+  failures: number;
+  heard: { ref: string; got: string }[];
+}
+
+/** The reading screen: full window, one sentence, one button. */
+function ReadingSession({ script, done, onClose, onSaved }: {
+  script: ScriptLine[];
+  done: Set<number>;
+  onClose: () => void;
+  onSaved: (n: number) => void;
+}) {
+  const firstTodo = script.findIndex(l => !done.has(l.n));
+  const [i, setI] = useState(firstTodo < 0 ? 0 : firstTodo);
+  const [recording, setRecording] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const recRef = useRef<MediaRecorder | null>(null);
+  const chunks = useRef<Blob[]>([]);
+  const line = script[i];
+
+  // One microphone for the whole session, with the Session panel's settings.
+  useEffect(() => {
+    let s: MediaStream | null = null;
+    void (async () => {
+      try {
+        s = await navigator.mediaDevices.getUserMedia({
+          audio: micConstraints(readPref(MIC_KEY, 'default'), readPref(CLEANUP_KEY, 'off')),
+        });
+        setStream(s);
+      } catch {
+        setError('The microphone could not be opened. Check the Microphone choice in the Session panel.');
+      }
+    })();
+    return () => s?.getTracks().forEach(t => t.stop());
+  }, []);
+
+  const start = () => {
+    if (!stream || !line) return;
+    chunks.current = [];
+    const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find(t => MediaRecorder.isTypeSupported?.(t));
+    const rec = new MediaRecorder(stream, { audioBitsPerSecond: 64000, ...(mime ? { mimeType: mime } : {}) });
+    rec.ondataavailable = e => e.data.size && chunks.current.push(e.data);
+    rec.onstop = async () => {
+      const type = rec.mimeType || mime || 'audio/webm';
+      const blob = new Blob(chunks.current, { type });
+      setSaving(true);
+      try {
+        const fd = new FormData();
+        fd.append('audio', blob, `clip.${type.includes('mp4') ? 'm4a' : 'webm'}`);
+        const d = await (await fetch(`/api/voice/clips/${line.n}`, { method: 'POST', body: fd })).json();
+        if (!d.success) throw new Error(d.error || 'The clip was not saved.');
+        onSaved(line.n);
+        setI(x => Math.min(x + 1, script.length - 1));
+      } catch (e: any) {
+        setError(e.message || String(e));
+      } finally {
+        setSaving(false);
+      }
+    };
+    rec.start();
+    recRef.current = rec;
+    setRecording(true);
+    setError(null);
+  };
+  const stop = () => {
+    recRef.current?.stop();
+    setRecording(false);
+  };
+  const toggle = () => (recording ? stop() : !saving && start());
+
+  // Space bar: start, then finish and move on. Escape closes.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        toggle();
+      } else if (e.key === 'Escape' && !recording) onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
+  const read = script.filter(l => done.has(l.n)).length;
+
+  // Rendered on <body>: inside the page, an animated ancestor makes "fixed"
+  // relative to itself and the screen ended up boxed inside its panel.
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Reading session"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 60,
+        background: 'var(--bg, #140a0c)',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '24px 16px',
+        gap: 28,
+      }}
+    >
+      <div style={{ position: 'absolute', top: 16, left: 16, right: 16, display: 'flex', gap: 12, alignItems: 'center' }}>
+        <div style={{ flex: 1, height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 2 }}>
+          <div style={{ width: `${(read / Math.max(1, script.length)) * 100}%`, height: '100%', background: 'var(--accent, #b8914a)', borderRadius: 2 }} />
+        </div>
+        <span className="fhint" style={{ margin: 0 }}>
+          {read} of {script.length}
+        </span>
+        <button className="btn btn-sm cut-sm" disabled={recording} onClick={onClose}>
+          Stop for now
+        </button>
+      </div>
+
+      {line ? (
+        <p lang={line.language} style={{ fontSize: 'clamp(1.6rem, 4.2vw, 2.8rem)', lineHeight: 1.45, maxWidth: 900, textAlign: 'center', margin: 0 }}>
+          {line.text}
+        </p>
+      ) : (
+        <p>There are no sentences yet.</p>
+      )}
+
+      <div style={{ width: 'min(420px, 90vw)' }}>
+        <MicLevel stream={recording ? stream : null} />
+      </div>
+
+      <div className="flex items-center gap-3 flex-wrap justify-center">
+        <button className="btn btn-primary cut-sm" style={{ minWidth: 220, fontSize: '1.1rem', padding: '14px 22px' }} disabled={!stream || saving || !line} onClick={toggle}>
+          {recording ? 'Done — next sentence' : saving ? 'Saving…' : done.has(line?.n ?? -1) ? 'Read it again' : 'Start reading'}
+        </button>
+        <button className="btn cut-sm" disabled={recording || saving || i === 0} onClick={() => setI(i - 1)}>
+          Back one
+        </button>
+        <button className="btn cut-sm" disabled={recording || saving || i >= script.length - 1} onClick={() => setI(i + 1)}>
+          Skip
+        </button>
+      </div>
+      <p className="fhint" style={{ textAlign: 'center', maxWidth: 520 }}>
+        Space starts a sentence and finishes it. Read at your own pace, the way you talk.
+        {done.has(line?.n ?? -1) ? ' This one is already recorded; reading it again replaces it.' : ''}
+      </p>
+      {error && <p className="fhint" style={{ color: '#e0a09e' }}>{error}</p>}
+    </div>,
+    document.body,
+  );
+}
+
+function VoicePanel() {
+  const [script, setScript] = useState<ScriptLine[]>([]);
+  const [done, setDone] = useState<Set<number>>(new Set());
+  const [minutes, setMinutes] = useState(0);
+  const [reading, setReading] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  const [measure, setMeasure] = useState<{ running: boolean; done: number; total: number; results: MeasureResult[]; error?: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [applied, setApplied] = useState(false);
+
+  const load = async () => {
+    try {
+      const d = await (await fetch('/api/voice')).json();
+      if (d.success) {
+        setScript(d.script);
+        setDone(new Set(d.clips));
+        setMinutes(d.minutes);
+      }
+      const m = await (await fetch('/api/voice/measure')).json();
+      if (m.success) setMeasure(m.measure);
+    } catch {}
+  };
+  useEffect(() => {
+    void load();
+  }, []);
+
+  // Poll while a measurement runs.
+  useEffect(() => {
+    if (!measure?.running) return;
+    const t = setInterval(async () => {
+      try {
+        const m = await (await fetch('/api/voice/measure')).json();
+        if (m.success) setMeasure(m.measure);
+      } catch {}
+    }, 3000);
+    return () => clearInterval(t);
+  }, [measure?.running]);
+
+  const prepare = async (language: 'el' | 'en', count: number) => {
+    setPreparing(true);
+    setError(null);
+    try {
+      const d = await (
+        await fetch('/api/voice/script', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ language, count }),
+        })
+      ).json();
+      if (!d.success) throw new Error(d.error || 'No sentences came back.');
+      setScript(d.script);
+    } catch (e: any) {
+      setError(e.message || String(e));
+    } finally {
+      setPreparing(false);
+    }
+  };
+
+  const startMeasure = async () => {
+    setError(null);
+    setApplied(false);
+    try {
+      const d = await (
+        await fetch('/api/voice/measure', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sample: 15 }) })
+      ).json();
+      if (!d.success) throw new Error(d.error);
+      setMeasure(d.measure);
+    } catch (e: any) {
+      setError(e.message || String(e));
+    }
+  };
+
+  const ranked = (measure?.results || [])
+    .filter(r => r.wer !== null)
+    .sort((a, b) => (a.wer ?? 1) - (b.wer ?? 1) || a.seconds - b.seconds);
+
+  const apply = async () => {
+    const d = await (
+      await fetch('/api/voice/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order: ranked.slice(0, 3).map(r => `${r.providerId}::${r.model}`) }),
+      })
+    ).json();
+    if (d.success) setApplied(true);
+    else setError(d.error);
+  };
+
+  const read = done.size;
+  const pct = (x: number) => `${Math.round(x * 100)}%`;
+
+  return (
+    <Frame title="Your voice" className="mb-6" lit={read > 0}>
+      <p className="sec-note">
+        Read short, everyday sentences aloud, one at a time: nothing about the hard things,
+        just ordinary talk with your own names and places in it. Each one is saved with the
+        words it should be. Then the app can measure which engine hears you best, and later
+        a model can be trained on your voice. Half an hour to an hour makes a real
+        difference; you can stop and carry on another day.
+      </p>
+
+      <div className="flex gap-6 flex-wrap" style={{ margin: '4px 0 var(--gap)' }}>
+        <span className="fhint" style={{ margin: 0 }}>
+          <b>{read}</b> of {script.length} sentences read · about <b>{minutes}</b> min of your voice
+        </span>
+      </div>
+
+      <div className="flex gap-3 flex-wrap" style={{ marginBottom: 'var(--gap)' }}>
+        <button className="btn btn-primary cut-sm" disabled={script.length === 0} onClick={() => setReading(true)}>
+          {read === 0 ? 'Start reading' : 'Carry on reading'}
+        </button>
+        <button className="btn cut-sm" disabled={preparing} onClick={() => void prepare('el', 100)}>
+          <span className="flex items-center gap-2">
+            {preparing && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+            {preparing ? 'Writing sentences…' : script.length ? 'Add 100 Greek sentences' : 'Prepare 100 Greek sentences'}
+          </span>
+        </button>
+        <button className="btn btn-sm cut-sm" disabled={preparing} onClick={() => void prepare('en', 40)}>
+          Add 40 English
+        </button>
+      </div>
+      <p className="fhint">Add your names and places to My words first; the sentences use them.</p>
+
+      <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 'var(--gap)', marginTop: 'var(--gap)' }}>
+        <p className="k" style={{ margin: '0 0 6px' }}>Which engine hears you best?</p>
+        <p className="fhint">
+          Runs a sample of your sentences through every transcription engine you have and counts
+          the words each gets wrong. Takes a few minutes.
+        </p>
+        <button className="btn cut-sm" disabled={read < 5 || !!measure?.running} onClick={() => void startMeasure()}>
+          {measure?.running ? `Measuring… ${measure.done} of ${measure.total}` : read < 5 ? 'Read 5 sentences first' : 'Measure'}
+        </button>
+
+        {ranked.length > 0 && !measure?.running && (
+          <div style={{ marginTop: 'var(--gap)' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr className="fhint" style={{ textAlign: 'left' }}>
+                  <th style={{ padding: '4px 8px 4px 0' }}>Engine</th>
+                  <th style={{ padding: 4 }}>Words wrong</th>
+                  <th style={{ padding: 4 }}>Seconds</th>
+                  <th style={{ padding: 4 }}>Failed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ranked.map((r, k) => (
+                  <tr key={r.label} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                    <td style={{ padding: '6px 8px 6px 0' }}>
+                      {k === 0 ? '★ ' : ''}
+                      {r.label}
+                      {r.heard[0] && (
+                        <details>
+                          <summary className="fhint" style={{ cursor: 'pointer' }}>What it heard</summary>
+                          {r.heard.map((h, j) => (
+                            <p key={j} className="fhint" style={{ margin: '4px 0' }}>
+                              Read: {h.ref}
+                              <br />
+                              Heard: {h.got}
+                            </p>
+                          ))}
+                        </details>
+                      )}
+                    </td>
+                    <td style={{ padding: 4 }}>{pct(r.wer ?? 1)}</td>
+                    <td style={{ padding: 4 }}>{r.seconds.toFixed(1)}</td>
+                    <td style={{ padding: 4 }}>{r.failures}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <button className="btn btn-primary cut-sm" style={{ marginTop: 'var(--gap)' }} disabled={applied} onClick={() => void apply()}>
+              {applied ? 'Done — these are now your transcription engines' : 'Use the best three, in this order'}
+            </button>
+          </div>
+        )}
+        {measure?.error && <p className="fhint">{measure.error}</p>}
+      </div>
+
+      {error && <p className="fhint">{error}</p>}
+
+      {reading && (
+        <ReadingSession
+          script={script}
+          done={done}
+          onSaved={n => setDone(d => new Set(d).add(n))}
+          onClose={() => {
+            setReading(false);
+            void load();
+          }}
+        />
+      )}
+    </Frame>
+  );
+}
+
 function SettingsCenter({
   google,
   onLinkGoogle,
@@ -3402,6 +3997,8 @@ function SettingsCenter({
       </Frame>
 
       <WordsPanel />
+
+      <VoicePanel />
 
       <Frame title="Where your words go" className="mb-6" lit={config.CLOUD_CONSENT === 'yes'}>
         <p className="sec-note">

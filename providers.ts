@@ -761,7 +761,7 @@ async function openaiTranscribe(
   buffer: Buffer,
   mimetype: string,
   language: string,
-  spoken: string,
+  words: string,
 ): Promise<string> {
   const form = new FormData();
   form.append(
@@ -771,11 +771,11 @@ async function openaiTranscribe(
   );
   form.append('model', model);
   if (language) form.append('language', language);
-  form.append(
-    'prompt',
-    // Whisper only reads the last ~224 tokens of its prompt.
-    `This is a personal memory narrative journal recording. ${spoken} Please transcribe it accurately.`.slice(0, 700),
-  );
+  // Whisper treats its prompt as "the transcript so far" and follows its
+  // LANGUAGE: an English instruction here made whisper-large-v3-turbo return
+  // Greek speech as English (caught by the voice measurement, 30 Sep 2026).
+  // So the prompt is only the speaker's own words, in their own spelling.
+  if (words) form.append('prompt', words.slice(0, 700));
 
   // Most providers only have /audio/transcriptions. Gateways sometimes only
   // have /audio/translations, which is not the same thing — it always returns
@@ -921,7 +921,13 @@ export async function transcribe(
   config: Record<string, string>,
   buffer: Buffer,
   mimetype: string,
-  opts: { engine?: string; language?: string; words?: string } = {},
+  opts: {
+    engine?: string;
+    language?: string;
+    words?: string;
+    /** Exactly this provider and model, nothing else (the voice measurement). */
+    only?: { providerId: string; model: string };
+  } = {},
 ): Promise<TranscribeResult> {
   const language = opts.language && LANGUAGE_NAMES[opts.language] ? opts.language : '';
   const spoken =
@@ -946,8 +952,14 @@ export async function transcribe(
   }
 
   // The Vault can pin one engine for the session rather than leaving it on Auto.
-  const picked =
-    opts.engine && opts.engine !== 'auto' ? attempts.filter(a => a.p.id === opts.engine) : attempts;
+  const onlyProvider = opts.only ? byId.get(opts.only.providerId) : undefined;
+  const picked = opts.only
+    ? onlyProvider
+      ? [{ p: onlyProvider, model: opts.only.model }]
+      : []
+    : opts.engine && opts.engine !== 'auto'
+      ? attempts.filter(a => a.p.id === opts.engine)
+      : attempts;
 
   if (picked.length === 0) {
     throw new Error(
@@ -965,7 +977,7 @@ export async function transcribe(
           ? await liveTranscribe(p.apiKey, model, buffer, { language })
           : p.kind === 'gemini'
             ? await geminiTranscribe(p, model, buffer, mimetype, spoken)
-            : await openaiTranscribe(p, model, buffer, mimetype, language, spoken);
+            : await openaiTranscribe(p, model, buffer, mimetype, language, opts.words || '');
       console.info(`[transcribe] ${p.id}/${model}`);
       return { text, provider: p.id, model, local: p.local };
     } catch (err: any) {
@@ -1002,6 +1014,31 @@ async function listGeminiModels(apiKey: string, method = 'generateContent'): Pro
     .map((m: any) => String(m?.name || '').replace(/^models\//, ''))
     .filter(Boolean)
     .sort();
+}
+
+/** Every transcription engine that may be used right now: the assigned
+ *  slots first, then each allowed provider's own speech models. For the
+ *  voice measurement, which tries them all on the same clips. */
+export function transcriptionCandidates(config: Record<string, string>): { providerId: string; model: string; label: string }[] {
+  const providers = resolveProviders(config);
+  const consented = hasCloudConsent(config);
+  const allowed = chainFor(config, providers).filter(p => p.local || consented);
+  const out: { providerId: string; model: string; label: string }[] = [];
+  const add = (p: Provider, model: string) => {
+    if (model && !out.some(o => o.providerId === p.id && o.model === model)) out.push({ providerId: p.id, model, label: `${p.label} · ${model}` });
+  };
+  const byId = new Map(allowed.map(p => [p.id, p]));
+  for (const s of slotsFor(config, 'transcribe')) {
+    const p = byId.get(s.providerId);
+    if (p) add(p, s.model);
+  }
+  for (const p of allowed) {
+    for (const m of p.stt) add(p, m);
+    // Google's dedicated speech model, not in the automatic list because it
+    // is not on every account; a failure here is simply reported.
+    if (p.kind === 'gemini') add(p, 'gemini-3.5-transcribe');
+  }
+  return out;
 }
 
 export async function listModels(p: Provider): Promise<string[]> {

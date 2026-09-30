@@ -342,3 +342,154 @@ function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> 
     );
   });
 }
+
+/* -----------------------------------------------------------------------------
+   Streaming: words on screen while the person is still speaking.
+
+   The browser sends 16 kHz PCM16 as it is captured; each chunk goes straight
+   into a Live session and the model's running transcript comes back.
+
+   A Live session does not last forever. Google ends it after some minutes,
+   warns with goAway first, and a network hiccup can end it without a warning.
+   Any of those opens a fresh session, and audio arriving in between is held
+   (up to a minute) and sent once the new session is up, so a reconnect costs
+   at most a moment of live text. The recording itself never depends on this
+   path; it is saved separately and gets the careful pass when it ends.
+   -------------------------------------------------------------------------- */
+
+export interface LiveStream {
+  send(pcm16k: Buffer): void;
+  /** Stops sending; the transcript of what was already sent still arrives. */
+  finish(): Promise<void>;
+  close(): void;
+}
+
+export function openLiveTranscription(opts: {
+  apiKey: string;
+  model: string;
+  language?: string;
+  onText: (text: string) => void;
+  onState: (state: 'open' | 'reconnecting' | 'failed', detail?: string) => void;
+}): LiveStream {
+  const ai = new GoogleGenAI({ apiKey: opts.apiKey });
+  const code = LIVE_LANGUAGE[opts.language || ''];
+  const MAX_PENDING = 16000 * 2 * 60; // one minute of audio
+  let session: any = null;
+  let generation = 0;
+  let connecting = false;
+  let closed = false;
+  let failures = 0;
+  let pending: Buffer[] = [];
+  let pendingBytes = 0;
+
+  const sendNow = (s: any, chunk: Buffer) =>
+    s.sendRealtimeInput({ audio: { data: chunk.toString('base64'), mimeType: 'audio/pcm;rate=16000' } });
+
+  const connect = async () => {
+    if (closed || connecting) return;
+    connecting = true;
+    const mine = ++generation;
+    try {
+      const s = await ai.live.connect({
+        model: opts.model,
+        config: {
+          responseModalities: [Modality.TEXT],
+          inputAudioTranscription: code ? ({ languageHints: { languageCodes: [code] } } as any) : {},
+          realtimeInputConfig: { automaticActivityDetection: { silenceDurationMs: 2000 } },
+        },
+        callbacks: {
+          onmessage: (msg: any) => {
+            const t = msg.serverContent?.inputTranscription?.text;
+            if (t) opts.onText(t);
+            // The session is about to end: start the next one now.
+            if (msg.goAway && mine === generation && !closed) replace();
+          },
+          onerror: () => {},
+          onclose: () => {
+            if (mine === generation && !closed) replace();
+          },
+        },
+      });
+      if (closed) {
+        try {
+          s.close();
+        } catch {}
+        return;
+      }
+      session = s;
+      failures = 0;
+      opts.onState('open');
+      const held = pending;
+      pending = [];
+      pendingBytes = 0;
+      for (const c of held) sendNow(s, c);
+    } catch (e: any) {
+      failures++;
+      if (failures > 6) {
+        opts.onState('failed', e?.message || String(e));
+        return;
+      }
+      opts.onState('reconnecting', e?.message || String(e));
+      setTimeout(() => {
+        connecting = false;
+        void connect();
+      }, Math.min(15000, 500 * 2 ** failures));
+      return;
+    } finally {
+      if (session || closed) connecting = false;
+    }
+  };
+
+  const replace = () => {
+    const old = session;
+    session = null;
+    connecting = false;
+    opts.onState('reconnecting');
+    void connect();
+    // Let the old one deliver what it already heard, then let it go.
+    setTimeout(() => {
+      try {
+        old?.close();
+      } catch {}
+    }, 5000);
+  };
+
+  void connect();
+
+  return {
+    send(chunk) {
+      if (closed) return;
+      if (session) {
+        try {
+          sendNow(session, chunk);
+          return;
+        } catch {
+          replace();
+        }
+      }
+      pending.push(chunk);
+      pendingBytes += chunk.length;
+      while (pendingBytes > MAX_PENDING && pending.length) pendingBytes -= pending.shift()!.length;
+    },
+    async finish() {
+      const s = session;
+      closed = true;
+      if (!s) return;
+      try {
+        // A little silence lets the model hear the last sentence end.
+        sendNow(s, Buffer.alloc(16000 * 2 * 2));
+        s.sendRealtimeInput({ audioStreamEnd: true });
+      } catch {}
+      await new Promise(r => setTimeout(r, 4000));
+      try {
+        s.close();
+      } catch {}
+    },
+    close() {
+      closed = true;
+      try {
+        session?.close();
+      } catch {}
+    },
+  };
+}

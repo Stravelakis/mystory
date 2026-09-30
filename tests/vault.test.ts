@@ -80,3 +80,34 @@ describe('entries on disk', () => {
     expect(trashed.some(n => n.startsWith(id))).toBe(true);
   });
 });
+
+describe('recordings in progress', () => {
+  const sid = 'abc12345xyz';
+
+  it('appends pieces in order, ignores a retried piece, refuses a gap', async () => {
+    await vault.appendPartial(sid, 0, Buffer.from('one-'), 'audio/webm');
+    await vault.appendPartial(sid, 1, Buffer.from('two-'), 'audio/webm');
+    await vault.appendPartial(sid, 1, Buffer.from('two-'), 'audio/webm'); // retry
+    await expect(vault.appendPartial(sid, 3, Buffer.from('x'), 'audio/webm')).rejects.toThrow(/Expected piece 2/);
+    const part = await vault.readPartial(sid);
+    expect(part?.buffer.toString()).toBe('one-two-');
+    expect(part?.mime).toBe('audio/webm');
+  });
+
+  it('offers a recording back only once its pieces have stopped arriving', async () => {
+    expect((await vault.listPartials(60_000)).map(p => p.sid)).not.toContain(sid);
+    expect((await vault.listPartials(0)).map(p => p.sid)).toContain(sid);
+  });
+
+  it('keeps the pieces if what was saved is shorter than them', async () => {
+    await vault.dropPartial(sid, 3);
+    expect(await vault.readPartial(sid)).not.toBeNull();
+    await vault.dropPartial(sid, 8);
+    expect(await vault.readPartial(sid)).toBeNull();
+  });
+
+  it('refuses ids that could escape the folder', async () => {
+    await expect(vault.appendPartial('../../x', 0, Buffer.from('x'), 'audio/webm')).rejects.toThrow();
+    expect(vault.isValidSid('..')).toBe(false);
+  });
+});
