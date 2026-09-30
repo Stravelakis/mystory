@@ -64,6 +64,23 @@ Read this first. Everything after it is the permanent reference.
    LocalAI" applies to My Story only. The gitignored `.mcp.json` here is
    just forge wiring for making this project's brand art.
 
+### Voice work (30 Sep 2026)
+
+The owner reported that "it does not understand me", with every entry bad.
+The causes found and fixed: transcription stopped at the first pause, no
+language hint, a 10 MB upload cap that lost long sessions, the browser's
+phone-call filters on a good mic, and Whisper answering Greek in English.
+Added: My words, Your voice (reading + Measure), live words, calm sessions,
+recordings saved in pieces, Transcribe again, and `training/` (LoRA
+fine-tuning; **not yet run**, since it needs his reading first).
+
+**Next:** once he has read 30–60 minutes, run Measure and show him the
+table. If the best engine still gets more than about 5% of words wrong,
+run `training/` on the laptop's RTX 3070 (8 GB, `--batch 2 --accum 8` if it
+runs out of memory). A trained model must run locally, against the
+recorded "no local model" decision, so it needs his yes (it is flagged in
+training/README.md).
+
 ### Things that will bite
 
 - **`CLOUD_CONSENT=yes` must be in the server's `.env`** (v1.0.0 consent
