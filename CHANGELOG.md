@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 ## [Unreleased]
 
 ### Added
+- **Start a session** (Vault): a quiet full-screen view for talking without the rest of the app. It has one button to begin, **Pause** (still one recording, and pauses aren't timed or transcribed), **I'm done**, and the option to hide the words. The space bar pauses and carries on.
+- The screen stays awake while recording, so a phone doesn't lock mid-sentence and cut the microphone.
 - **Your voice** (Settings): a reading session that teaches the app how you sound. It prepares calm, everyday sentences with your own names and places in them, and you read them one at a time on a full-screen view (the space bar starts and finishes each one). Each clip is saved with its text in `vault/voice/`. **Measure** then runs your clips through every engine you have and ranks them by how many words each got wrong, and **Use the best three** sets them in that order.
 - **Words while you speak** (Session → Words while I speak, on by default). The microphone streams to Gemini Live and each sentence appears a few seconds after you say it. Google ends a Live session after about 9 minutes; it reconnects on its own in a fraction of a second, holding the audio meanwhile. When you stop, the full recording still gets the careful pass. If that pass fails, the live words are kept.
 - **The recording is saved while you speak**, in 5-second pieces. A crash, a closed tab or a flat battery costs seconds, not the session. Next time, the vault offers **Recover it**.
