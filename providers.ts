@@ -773,7 +773,8 @@ async function openaiTranscribe(
   if (language) form.append('language', language);
   form.append(
     'prompt',
-    `This is a personal memory narrative journal recording. ${spoken} Please transcribe it accurately.`,
+    // Whisper only reads the last ~224 tokens of its prompt.
+    `This is a personal memory narrative journal recording. ${spoken} Please transcribe it accurately.`.slice(0, 700),
   );
 
   // Most providers only have /audio/transcriptions. Gateways sometimes only
@@ -866,7 +867,12 @@ async function geminiTranscribe(
 export async function tidyTranscript(
   config: Record<string, string>,
   raw: string,
+  words: { term: string; note?: string }[] = [],
 ): Promise<{ text: string; provider: string; model: string }> {
+  const list = words
+    .slice(0, 300)
+    .map(w => `- ${w.term}${w.note ? ` (${w.note})` : ''}`)
+    .join('\n');
   const result = await chat(config, {
     task: 'title',
     temperature: 0,
@@ -881,7 +887,19 @@ Keep the language it is in.
 
 This is somebody's record of what happened to them. You are removing the noise
 of speech, nothing else. If you are unsure whether something is noise, keep it.
+${
+  list
+    ? `
+The speaker's own names and words are listed below. Speech recognition often
+mishears these. Where a word in the transcript is clearly a mishearing of one
+of them (it sounds the same and fits the sentence), write it as listed. Change
+nothing else on the strength of this list, and never insert a listed word
+that was not said.
 
+${list}
+`
+    : ''
+}
 Return only the cleaned transcript.
 
 Transcript:
@@ -903,12 +921,14 @@ export async function transcribe(
   config: Record<string, string>,
   buffer: Buffer,
   mimetype: string,
-  opts: { engine?: string; language?: string } = {},
+  opts: { engine?: string; language?: string; words?: string } = {},
 ): Promise<TranscribeResult> {
   const language = opts.language && LANGUAGE_NAMES[opts.language] ? opts.language : '';
-  const spoken = language
-    ? `The recording is in ${LANGUAGE_NAMES[language]}.`
-    : 'The recording is in English or Greek, or a mix of both.';
+  const spoken =
+    (language
+      ? `The recording is in ${LANGUAGE_NAMES[language]}.`
+      : 'The recording is in English or Greek, or a mix of both.') +
+    (opts.words ? ` Names and words the speaker uses, spelled the way they should be written: ${opts.words}.` : '');
 
   const providers = resolveProviders(config);
   const consented = hasCloudConsent(config);

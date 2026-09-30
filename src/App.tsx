@@ -1182,6 +1182,36 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
     languageRef.current = language;
   }, [language]);
 
+  // Transcribe again: the saved recording through today's transcriber, with
+  // the current word list and language. The old text is kept in .trash.
+  const [retranscribing, setRetranscribing] = useState(false);
+  const retranscribe = async () => {
+    if (!entryId) return;
+    setRetranscribing(true);
+    try {
+      const d = await (
+        await fetch(`/api/vault/entries/${entryId}/retranscribe`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ language, style: styleRef.current, engine: engineRef.current }),
+        })
+      ).json();
+      if (!d.success) throw new Error(d.error || 'Transcribing again failed.');
+      setTranscript(d.transcript);
+      setVerbatim(d.verbatim || '');
+      setSavedAt(d.entry?.updated || new Date().toISOString());
+      triggerAlert(
+        `Transcribed again (${d.previousWords} words before, ${d.transcript.split(/\s+/).filter(Boolean).length} now). The earlier version is kept in the vault's .trash folder.`,
+        'success',
+      );
+      void refreshEntries();
+    } catch (e: any) {
+      triggerAlert(e.message || String(e), 'error');
+    } finally {
+      setRetranscribing(false);
+    }
+  };
+
   const refreshEntries = async () => {
     try {
       const res = await fetch('/api/vault/entries');
@@ -1910,6 +1940,19 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
                     Save now
                   </span>
                 </button>
+                {entryId && entries.find(e => e.id === entryId)?.audio && (
+                  <button
+                    className="btn cut-sm"
+                    disabled={retranscribing || isRecording}
+                    onClick={() => void retranscribe()}
+                    title="Run this entry's recording through transcription again, with your word list. The current text is kept in .trash."
+                  >
+                    <span className="flex items-center gap-2">
+                      <RefreshCw className={`w-3.5 h-3.5 ${retranscribing ? 'animate-spin' : ''}`} />
+                      {retranscribing ? 'Transcribing again…' : 'Transcribe again'}
+                    </span>
+                  </button>
+                )}
                 <span className="keydiv" />
                 {google.connected ? (
                   <>
@@ -2861,6 +2904,248 @@ const ROUTING_NOTE: Record<string, string> = {
   'local-only': 'Nothing leaves this machine. Cloud providers are not asked, and Google Drive is switched off.',
 };
 
+/* =============================================================================
+   MY WORDS — the names and words the transcriber cannot know (words.ts).
+   Built with help: four prompts for what to write, one-tap therapy words,
+   and suggestions pulled from the writer's own entries.
+   ========================================================================== */
+
+interface MyWord {
+  term: string;
+  note?: string;
+}
+
+const WORD_PROMPTS: { title: string; hint: string; examples: string }[] = [
+  {
+    title: 'People',
+    hint: 'Everyone who comes up when you talk: family, friends, teachers, neighbours. Add the name AND what you call them at home, as separate words.',
+    examples: 'Σταυρούλα — my sister · Βούλα — what we call her · ο παππούς Μιχάλης',
+  },
+  {
+    title: 'Places',
+    hint: 'Towns, villages, neighbourhoods, schools, streets, the name of the café, the church.',
+    examples: 'Κιλκίς · Άνω Πόλη · 3ο Γυμνάσιο',
+  },
+  {
+    title: 'Family words',
+    hint: 'Nicknames, sayings, and words only your family uses. Also anything in another language you mix in.',
+    examples: 'το "μικρό" · "σιγά μην" · Oma',
+  },
+  {
+    title: 'Words from therapy and reading',
+    hint: 'English terms you say inside Greek sentences. Tap to add.',
+    examples: '',
+  },
+];
+
+function WordsPanel() {
+  const [words, setWords] = useState<MyWord[]>([]);
+  const [term, setTerm] = useState('');
+  const [note, setNote] = useState('');
+  const [therapy, setTherapy] = useState<string[]>([]);
+  const [suggested, setSuggested] = useState<(MyWord & { pick: boolean })[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const d = await (await fetch('/api/words')).json();
+        if (d.success) setWords(d.words);
+        const v = await (await fetch('/api/vocabulary')).json();
+        if (v.success) setTherapy(v.terms.map((t: any) => t.label));
+      } catch {}
+    })();
+  }, []);
+
+  const save = async (next: MyWord[]) => {
+    setWords(next);
+    try {
+      const d = await (
+        await fetch('/api/words', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ words: next }),
+        })
+      ).json();
+      if (d.success) setWords(d.words);
+      else setError(d.error || 'Could not save the list.');
+    } catch (e: any) {
+      setError(e.message || String(e));
+    }
+  };
+
+  const has = (t: string) => words.some(w => w.term.toLocaleLowerCase() === t.toLocaleLowerCase());
+
+  const add = () => {
+    const t = term.trim();
+    if (!t) return;
+    // Several at once: one per line, or separated by commas.
+    const many = t.split(/\n|,(?![^(]*\))/).map(x => x.trim()).filter(Boolean);
+    const next = [...words];
+    for (const m of many) if (!next.some(w => w.term.toLocaleLowerCase() === m.toLocaleLowerCase())) next.push(many.length === 1 && note.trim() ? { term: m, note: note.trim() } : { term: m });
+    setTerm('');
+    setNote('');
+    void save(next);
+  };
+
+  const suggest = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const d = await (await fetch('/api/words/suggest', { method: 'POST' })).json();
+      if (!d.success) throw new Error(d.error || 'No suggestions came back.');
+      setSuggested(d.words.map((w: MyWord) => ({ ...w, pick: true })));
+      if (d.note) setError(d.note);
+    } catch (e: any) {
+      setError(e.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Frame title="My words" className="mb-6" lit={words.length > 0}>
+      <p className="sec-note">
+        Names and words the transcriber cannot know: your family, your places, the words
+        your family uses. They are given to every transcription, and the tidying pass may
+        correct a misheard word to one of these — only when it clearly sounds the same.
+        This list saves itself as you change it.
+      </p>
+
+      <div className="flex gap-2 flex-wrap items-stretch" style={{ marginBottom: 8 }}>
+        <span className="inwrap cut-sm" style={{ flex: '2 1 200px' }}>
+          <input
+            className="input"
+            value={term}
+            placeholder="A word or name (or several, separated by commas)"
+            onChange={e => setTerm(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && add()}
+          />
+        </span>
+        <span className="inwrap cut-sm" style={{ flex: '1 1 160px' }}>
+          <input
+            className="input"
+            value={note}
+            placeholder="Who or what it is (optional)"
+            onChange={e => setNote(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && add()}
+          />
+        </span>
+        <button className="btn cut-sm" disabled={!term.trim()} onClick={add}>
+          Add
+        </button>
+      </div>
+
+      {words.length > 0 && (
+        <div className="flex flex-wrap gap-2" style={{ margin: '8px 0 var(--gap)' }}>
+          {words.map(w => (
+            <span
+              key={w.term}
+              className="tag"
+              title={w.note || ''}
+              // Shown as written: capitals would hide accents and spelling,
+              // which is the thing being checked here.
+              style={{ textTransform: 'none', letterSpacing: 0, fontSize: '0.85rem' }}
+            >
+              <i />
+              {w.term}
+              {w.note ? <span style={{ opacity: 0.6, marginLeft: 6 }}>{w.note}</span> : null}
+              <button
+                type="button"
+                aria-label={`Remove ${w.term}`}
+                onClick={() => void save(words.filter(x => x.term !== w.term))}
+                style={{ background: 'none', border: 0, color: 'inherit', cursor: 'pointer', marginLeft: 6, padding: 0 }}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div className="flex gap-3 flex-wrap" style={{ marginBottom: 'var(--gap)' }}>
+        <button className="btn btn-sm cut-sm" onClick={() => setShowHelp(h => !h)} aria-expanded={showHelp}>
+          {showHelp ? 'Hide the help' : 'Help me build my list'}
+        </button>
+        <button className="btn btn-sm cut-sm" disabled={busy} onClick={() => void suggest()}>
+          <span className="flex items-center gap-2">
+            {busy && <RefreshCw className="w-3 h-3 animate-spin" />}
+            {busy ? 'Reading your entries…' : 'Find words in my entries'}
+          </span>
+        </button>
+      </div>
+
+      {error && <p className="fhint">{error}</p>}
+
+      {suggested && (
+        <div style={{ marginBottom: 'var(--gap)' }}>
+          {suggested.length === 0 ? (
+            <p className="fhint">Nothing new found in your entries.</p>
+          ) : (
+            <>
+              <p className="k" style={{ margin: '0 0 6px' }}>Found in your entries — untick any that are wrong</p>
+              <div className="flex flex-col gap-1">
+                {suggested.map((w, i) => (
+                  <label key={w.term} className="flex items-center gap-2" style={{ cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={w.pick}
+                      onChange={e => setSuggested(suggested.map((x, j) => (j === i ? { ...x, pick: e.target.checked } : x)))}
+                    />
+                    <span>{w.term}</span>
+                    {w.note && <span className="fhint" style={{ margin: 0 }}>{w.note}</span>}
+                  </label>
+                ))}
+              </div>
+              <button
+                className="btn btn-sm cut-sm"
+                style={{ marginTop: 8 }}
+                onClick={() => {
+                  void save([...words, ...suggested.filter(w => w.pick && !has(w.term)).map(({ term, note }) => (note ? { term, note } : { term }))]);
+                  setSuggested(null);
+                }}
+              >
+                Add the ticked ones
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {showHelp && (
+        <div className="grid g2" style={{ gap: 'var(--gap)' }}>
+          {WORD_PROMPTS.map(p => (
+            <div key={p.title} className="tile" style={{ padding: '0.8rem 1rem' }}>
+              <p className="k" style={{ margin: 0 }}>{p.title}</p>
+              <p className="fhint" style={{ margin: '4px 0' }}>{p.hint}</p>
+              {p.examples && <p className="fhint" style={{ margin: 0, opacity: 0.75 }}>For example: {p.examples}</p>}
+              {p.title.startsWith('Words from therapy') && (
+                <div className="flex flex-wrap gap-2" style={{ marginTop: 6 }}>
+                  {therapy.map(t => (
+                    <button
+                      key={t}
+                      type="button"
+                      className="btn btn-sm cut-sm"
+                      disabled={has(t)}
+                      onClick={() => void save([...words, { term: t }])}
+                      style={{ textTransform: 'none', letterSpacing: 0 }}
+                    >
+                      {has(t) ? '✓ ' : '+ '}
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Frame>
+  );
+}
+
 function SettingsCenter({
   google,
   onLinkGoogle,
@@ -3115,6 +3400,8 @@ function SettingsCenter({
           Trashed entries move to <code>.trash</code> inside that folder. Nothing in this app deletes anything.
         </p>
       </Frame>
+
+      <WordsPanel />
 
       <Frame title="Where your words go" className="mb-6" lit={config.CLOUD_CONSENT === 'yes'}>
         <p className="sec-note">

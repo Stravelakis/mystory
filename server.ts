@@ -35,6 +35,7 @@ import {
   trashEntry,
   saveAudio,
   findAudio,
+  backupEntry,
   newId,
   isValidId,
   VAULT_DIR,
@@ -88,6 +89,7 @@ import { translate } from './translate.ts';
 import { liveTranslateSpeech } from './live.ts';
 import { draftEpisode, proposeEpisodes, render as renderForEpisode } from './episodes.ts';
 import { repair, checkUpdate } from './maintenance.ts';
+import { loadWords, saveWords, wordsHint, keepIfPresent } from './words.ts';
 import { planParts, openChapter, readChapter, savePart, listChapters, isChapterId } from './chapters.ts';
 import { timelineKey } from './vault.ts';
 
@@ -297,9 +299,11 @@ async function startServer() {
 
     try {
       const config = await loadConfig();
+      const words = await loadWords();
       const result = await transcribe(config, req.file.buffer, req.file.mimetype || 'audio/webm', {
         engine: req.body?.engine,
         language: req.body?.language === 'en' ? 'en' : 'el',
+        words: wordsHint(words),
       });
 
       // What came off the recording, before anything tidied it.
@@ -315,7 +319,7 @@ async function startServer() {
       const style = req.body?.style === 'verbatim' ? 'verbatim' : 'corrected';
       if (style === 'corrected' && spoken.trim().length > 20) {
         try {
-          const tidy = await tidyTranscript(config, spoken);
+          const tidy = await tidyTranscript(config, spoken, words);
           if (tidy.text.trim()) {
             transcript = tidy.text;
             verbatim = spoken;
@@ -591,6 +595,121 @@ async function startServer() {
       res.json({ success: true, ...draft });
     } catch (e: any) {
       console.error('Episode draft failed:', e);
+      res.status(500).json({ success: false, error: e.message || String(e) });
+    }
+  });
+
+  /* --- My words (words.ts) -------------------------------------------------- */
+
+  /** A model's JSON answer, with any code fence around it removed. */
+  function parseJsonAnswer(text: string): unknown {
+    try {
+      return JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
+    } catch {
+      return undefined;
+    }
+  }
+
+  app.get('/api/words', async (_req, res) => {
+    res.json({ success: true, words: await loadWords() });
+  });
+
+  app.put('/api/words', async (req, res) => {
+    try {
+      res.json({ success: true, words: await saveWords(req.body?.words) });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message || String(e) });
+    }
+  });
+
+  /** Names, places and unusual words from the writer's own entries, for them
+   *  to tick. Only terms that really occur in the entries survive. */
+  app.post('/api/words/suggest', async (_req, res) => {
+    try {
+      const config = await loadConfig();
+      const existing = await loadWords();
+      const summaries = await listEntries();
+      const texts: string[] = [];
+      let size = 0;
+      for (const s of summaries) {
+        try {
+          const e = await readEntry(s.id);
+          const t = `${e.title}\n${e.text}`;
+          if (size + t.length > 60_000) break;
+          texts.push(t);
+          size += t.length;
+        } catch {}
+      }
+      const corpus = texts.join('\n\n');
+      if (!corpus.trim()) return res.json({ success: true, words: [], note: 'There are no entries to learn from yet.' });
+
+      const result = await chat(config, {
+        task: 'title',
+        temperature: 0,
+        json: true,
+        maxTokens: 3000,
+        validate: t => parseJsonAnswer(t) !== undefined,
+        prompt: `Below are someone's journal entries, in Greek and/or English. List the words a speech recogniser is likely to get wrong when this person speaks: people's names and what they are called at home (nicknames, "θεία Ρούλα"), place names, family-specific words, foreign or technical words, and any unusual spellings.
+
+Return ONLY JSON: {"words":[{"term":"<exactly as written in the entries>","why":"<3-8 words: who or what it is>"}]}
+Copy each term exactly as it is spelled in the entries. At most 80. Leave out ordinary everyday words.
+Already on their list (do not repeat): ${existing.map(w => w.term).join(', ') || 'nothing yet'}
+
+Entries:
+"""
+${corpus}
+"""`,
+      });
+      const parsed = parseJsonAnswer(result.text);
+      res.json({ success: true, words: keepIfPresent(parsed, corpus, existing), provider: result.provider, model: result.model });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message || String(e) });
+    }
+  });
+
+  /** Runs a recording through transcription again — after a fix, with a new
+   *  word list, or in the other language. The entry as it was is copied to
+   *  .trash first, so an edit made by hand is never lost to a re-run. */
+  app.post('/api/vault/entries/:id/retranscribe', async (req, res) => {
+    const id = req.params.id;
+    if (!isValidId(id)) return res.status(400).json({ success: false, error: 'Not an entry id.' });
+    try {
+      const file = await findAudio(id);
+      if (!file) return res.status(404).json({ success: false, error: 'This entry has no recording to transcribe.' });
+      const before = await readEntry(id);
+      const buffer = await fs.readFile(file);
+      const mime = /\.m4a$|\.mp4$/.test(file) ? 'audio/mp4' : /\.ogg$/.test(file) ? 'audio/ogg' : /\.wav$/.test(file) ? 'audio/wav' : 'audio/webm';
+
+      const config = await loadConfig();
+      const words = await loadWords();
+      const language = req.body?.language === 'en' ? 'en' : 'el';
+      const result = await transcribe(config, buffer, mime, { engine: req.body?.engine, language, words: wordsHint(words) });
+
+      let text = result.text;
+      let verbatim: string | undefined;
+      if (req.body?.style !== 'verbatim' && result.text.trim().length > 20) {
+        try {
+          const tidy = await tidyTranscript(config, result.text, words);
+          if (tidy.text.trim()) {
+            text = tidy.text;
+            verbatim = result.text;
+          }
+        } catch (err: any) {
+          console.warn('Transcript cleanup failed, keeping it verbatim:', err?.message || err);
+        }
+      }
+
+      await backupEntry(id, 'before-retranscribe');
+      const entry = await saveEntry({ id, text, verbatim: verbatim ?? '' });
+      res.json({
+        success: true,
+        entry,
+        transcript: text,
+        verbatim,
+        previousWords: before.text.split(/\s+/).filter(Boolean).length,
+        engine: { provider: result.provider, model: result.model },
+      });
+    } catch (e: any) {
       res.status(500).json({ success: false, error: e.message || String(e) });
     }
   });

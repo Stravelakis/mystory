@@ -346,6 +346,15 @@ export async function listEntries(): Promise<EntrySummary[]> {
 
 /** Moves the entry and its audio into .trash. Nothing here unlinks anything —
  *  a journal is not a cache. */
+/** A copy of the entry as it is now, into .trash, before something rewrites
+ *  it wholesale (a re-transcription). The entry itself stays where it is. */
+export async function backupEntry(id: string, why: string): Promise<void> {
+  if (!isValidId(id)) throw new Error('Unknown entry.');
+  await fs.mkdir(TRASH_DIR, { recursive: true, mode: 0o700 });
+  const tag = why.replace(/[^a-z0-9-]/gi, '').slice(0, 40);
+  await fs.copyFile(path.join(VAULT_DIR, `${id}.md`), path.join(TRASH_DIR, `${id}.${Date.now()}.${tag}.md`));
+}
+
 export async function trashEntry(id: string): Promise<void> {
   if (!isValidId(id)) throw new Error('Unknown entry.');
   await fs.mkdir(TRASH_DIR, { recursive: true, mode: 0o700 });
