@@ -24,6 +24,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { VAULT_DIR, ensureVault } from './vault.ts';
 
 const VOICE_DIR = path.join(VAULT_DIR, 'voice');
@@ -44,6 +45,36 @@ export interface Clip {
   mime: string;
   bytes: number;
   at: string;
+  /** Loudest moment, in dB (0 = full scale). Set once checked. */
+  peakDb?: number;
+}
+
+/** Below this the clip holds no voice. A quiet speaker on a good mic peaks
+ *  around -30 dB; a microphone that is not connected sits near -80. On
+ *  30 Sep 2026, 100 clips were read into a dead microphone at -72 dB peak,
+ *  and every engine was then scored on silence. */
+export const SILENT_DB = -45;
+
+/** The loudest moment of a recording, via ffmpeg's volumedetect. */
+export function peakDb(audio: Buffer): Promise<number> {
+  return new Promise((resolve, reject) => {
+    let err = '';
+    let proc;
+    try {
+      proc = spawn('ffmpeg', ['-hide_banner', '-i', 'pipe:0', '-af', 'volumedetect', '-f', 'null', '-']);
+    } catch (e) {
+      return reject(e);
+    }
+    proc.stderr.on('data', (d: Buffer) => (err += d.toString()));
+    proc.on('error', reject);
+    proc.on('close', () => {
+      const m = err.match(/max_volume:\s*(-?[\d.]+|-inf) dB/);
+      if (!m) return reject(new Error('Could not measure the recording.'));
+      resolve(m[1] === '-inf' ? -120 : Number(m[1]));
+    });
+    proc.stdin.on('error', () => {});
+    proc.stdin.end(audio);
+  });
 }
 
 async function readJson<T>(file: string, fallback: T): Promise<T> {
@@ -101,7 +132,7 @@ export async function appendScript(lines: ScriptLine[]): Promise<ScriptLine[]> {
 const EXT: Record<string, string> = { webm: 'webm', ogg: 'ogg', mp4: 'm4a', wav: 'wav' };
 
 /** Saves (or replaces — "Redo") the clip for script line n. */
-export async function saveClip(n: number, audio: Buffer, mime: string): Promise<Clip> {
+export async function saveClip(n: number, audio: Buffer, mime: string, peak?: number): Promise<Clip> {
   const script = await loadScript();
   const line = script.find(l => l.n === n);
   if (!line) throw new Error('That line is not in the script.');
@@ -113,12 +144,43 @@ export async function saveClip(n: number, audio: Buffer, mime: string): Promise<
     if (e !== ext) await fs.rm(path.join(VOICE_DIR, 'clips', `${String(n).padStart(4, '0')}.${e}`), { force: true });
   }
   await fs.writeFile(path.join(VOICE_DIR, file), audio, { mode: 0o600 });
-  const clip: Clip = { n, text: line.text, file, mime, bytes: audio.length, at: new Date().toISOString() };
+  const clip: Clip = { n, text: line.text, file, mime, bytes: audio.length, at: new Date().toISOString(), ...(peak !== undefined ? { peakDb: peak } : {}) };
   const clips = (await loadClips()).filter(c => c.n !== n);
   clips.push(clip);
   clips.sort((a, b) => a.n - b.n);
   await writeJson(CLIPS_FILE, clips);
   return clip;
+}
+
+/** Measures every clip not yet measured, and moves silent ones to
+ *  vault/.trash/voice/ so their sentences count as unread again. Returns how
+ *  many were set aside. */
+export async function setAsideSilentClips(): Promise<{ checked: number; silent: number[] }> {
+  const clips = await loadClips();
+  const keep: Clip[] = [];
+  const silent: number[] = [];
+  let checked = 0;
+  for (const c of clips) {
+    if (c.peakDb === undefined) {
+      try {
+        c.peakDb = await peakDb(await readClip(c));
+        checked++;
+      } catch {
+        keep.push(c);
+        continue;
+      }
+    }
+    if (c.peakDb < SILENT_DB) {
+      const trash = path.join(VAULT_DIR, '.trash', 'voice');
+      await fs.mkdir(trash, { recursive: true, mode: 0o700 });
+      await fs
+        .rename(path.join(VOICE_DIR, c.file), path.join(trash, `${Date.now()}-${path.basename(c.file)}`))
+        .catch(() => {});
+      silent.push(c.n);
+    } else keep.push(c);
+  }
+  if (checked || silent.length) await writeJson(CLIPS_FILE, keep);
+  return { checked, silent };
 }
 
 export async function readClip(c: Clip): Promise<Buffer> {

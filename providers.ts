@@ -1025,6 +1025,9 @@ export function transcriptionCandidates(config: Record<string, string>): { provi
   const allowed = chainFor(config, providers).filter(p => p.local || consented);
   const out: { providerId: string; model: string; label: string }[] = [];
   const add = (p: Provider, model: string) => {
+    // "auto" lets a gateway pick a chat model; it cannot transcribe
+    // (OmniRoute: "Invalid transcription model: auto").
+    if (model === 'auto') return;
     if (model && !out.some(o => o.providerId === p.id && o.model === model)) out.push({ providerId: p.id, model, label: `${p.label} · ${model}` });
   };
   const byId = new Map(allowed.map(p => [p.id, p]));

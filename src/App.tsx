@@ -866,7 +866,15 @@ const LIVE_WORDS: PickerGroup[] = [
 ];
 
 /** A live level bar, so "is it hearing me?" is answered by looking. */
-function MicLevel({ stream }: { stream: MediaStream | null }) {
+/** Level (0..1) below which nothing at all is reaching the app: not a voice,
+ *  not even room noise. A dead or wrong microphone sits far below it. */
+const MIC_SILENT_LEVEL = 0.005;
+/** A read sentence peaks well above this; silence and hum stay under it. */
+const MIC_VOICE_LEVEL = 0.03;
+
+function MicLevel({ stream, onLevel }: { stream: MediaStream | null; onLevel?: (level: number) => void }) {
+  const onLevelRef = useRef(onLevel);
+  onLevelRef.current = onLevel;
   const [level, setLevel] = useState(0);
   useEffect(() => {
     if (!stream) {
@@ -887,7 +895,9 @@ function MicLevel({ stream }: { stream: MediaStream | null }) {
       let sum = 0;
       for (const v of buf) sum += v * v;
       // RMS to a 0..1 scale that reads well for speech.
-      setLevel(Math.min(1, Math.sqrt(sum / buf.length) * 6));
+      const v = Math.min(1, Math.sqrt(sum / buf.length) * 6);
+      setLevel(v);
+      onLevelRef.current?.(v);
       raf = requestAnimationFrame(tick);
     };
     tick();
@@ -938,9 +948,12 @@ const VAULT_PANELS = {
 type PanelId = keyof typeof VAULT_PANELS;
 type VaultColumns = [PanelId[], PanelId[]];
 
+// The transcript and what it names, side by side on one screen: Indicators
+// sits at the top of the right column, level with the writing (asked for
+// 30 Sep 2026).
 const DEFAULT_VAULT_LAYOUT: VaultColumns = [
   ['vault', 'session'],
-  ['entries', 'verbatim', 'english', 'when', 'indicators'],
+  ['indicators', 'entries', 'verbatim', 'english', 'when'],
 ];
 const VAULT_LAYOUT_KEY = 'mystory.vaultLayout';
 
@@ -960,6 +973,14 @@ function loadVaultLayout(): VaultColumns {
       }),
     ) as VaultColumns;
     DEFAULT_VAULT_LAYOUT.forEach((col, c) => col.forEach(id => !seen.has(id) && cols[c].push(id)));
+    // Once: layouts saved before Indicators moved up get it moved up too.
+    // After that, wherever the writer puts it is where it stays.
+    if (!localStorage.getItem('mystory.vaultLayout.indicatorsUp')) {
+      localStorage.setItem('mystory.vaultLayout.indicatorsUp', '1');
+      const at = cols.findIndex(col => col.includes('indicators'));
+      cols[at] = cols[at].filter(id => id !== 'indicators');
+      cols[1] = ['indicators', ...cols[1]];
+    }
     return cols;
   } catch {
     return DEFAULT_VAULT_LAYOUT;
@@ -1031,7 +1052,16 @@ function ArrangeablePanel({
   );
 }
 
-function VaultLayout({ panels, footer }: { panels: Record<PanelId, React.ReactNode>; footer?: React.ReactNode }) {
+function VaultLayout({
+  panels,
+  footer,
+  toolbar,
+}: {
+  panels: Record<PanelId, React.ReactNode>;
+  footer?: React.ReactNode;
+  /** Shown on the left of the Arrange row, so the page does not spend two rows on buttons. */
+  toolbar?: React.ReactNode;
+}) {
   const [cols, setCols] = useState<VaultColumns>(loadVaultLayout);
   const [arranging, setArranging] = useState(false);
 
@@ -1073,7 +1103,8 @@ function VaultLayout({ panels, footer }: { panels: Record<PanelId, React.ReactNo
 
   return (
     <>
-      <div className="flex items-center justify-end gap-2" style={{ marginBottom: 'var(--gap)' }}>
+      <div className="flex items-center justify-end gap-2 flex-wrap" style={{ marginBottom: 'var(--gap)' }}>
+        {toolbar && <div style={{ marginRight: 'auto' }}>{toolbar}</div>}
         {arranging && !isDefault && (
           <button type="button" className="btn btn-sm cut-sm" onClick={() => update(DEFAULT_VAULT_LAYOUT)}>
             Reset layout
@@ -1352,15 +1383,73 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
 
   // Device names are only visible after the microphone has been allowed once,
   // so the list is refreshed on load and again whenever a recording starts.
+  // Browsers hide microphone names until the page has been allowed to use
+  // one. Until then the list shows "Microphone 1, 2…", which is useless for
+  // choosing, so the panel offers to ask.
+  const [micNamesHidden, setMicNamesHidden] = useState(false);
   const refreshMics = useCallback(async () => {
     try {
       const all = await navigator.mediaDevices.enumerateDevices();
-      const inputs = all
-        .filter(d => d.kind === 'audioinput' && d.deviceId !== 'communications')
-        .map((d, i) => ({ value: d.deviceId || 'default', label: d.label || `Microphone ${i + 1}` }));
-      setMics(inputs);
+      const raw = all.filter(d => d.kind === 'audioinput' && d.deviceId !== 'communications');
+      setMicNamesHidden(raw.length === 0 || raw.every(d => !d.label));
+      setMics(raw.map((d, i) => ({ value: d.deviceId || 'default', label: d.label || `Microphone ${i + 1}` })));
     } catch {}
   }, []);
+  const showMicNames = async () => {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+      s.getTracks().forEach(t => t.stop());
+    } catch {
+      triggerAlert('The browser did not allow the microphone. Allow it in the address bar (the lock or microphone icon), then try again.', 'error');
+    }
+    await refreshMics();
+  };
+
+  // Test the microphone without recording anything.
+  const [testStream, setTestStream] = useState<MediaStream | null>(null);
+  const [testVerdict, setTestVerdict] = useState<string | null>(null);
+  const testPeak = useRef(0);
+  const testMic = async () => {
+    if (testStream) {
+      testStream.getTracks().forEach(t => t.stop());
+      setTestStream(null);
+      return;
+    }
+    setTestVerdict('Say something…');
+    testPeak.current = 0;
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(micId, cleanup) });
+      setTestStream(s);
+      void refreshMics();
+      setTimeout(() => {
+        s.getTracks().forEach(t => t.stop());
+        setTestStream(null);
+        setTestVerdict(
+          testPeak.current >= MIC_VOICE_LEVEL
+            ? 'It hears you. ✓'
+            : testPeak.current >= MIC_SILENT_LEVEL
+              ? 'It hears the room but hardly any voice. Move closer, or turn the microphone gain up.'
+              : 'Nothing is reaching the app from this microphone. Pick another one, or check it is plugged in and not muted.',
+        );
+      }, 5000);
+    } catch {
+      setTestVerdict('This microphone could not be opened. Pick another one.');
+    }
+  };
+
+  // While recording: if not even room noise arrives in the first seconds,
+  // the microphone is dead or wrong. Say so now, not after the session.
+  const [micSilent, setMicSilent] = useState(false);
+  const recPeak = useRef(0);
+  useEffect(() => {
+    if (!isRecording) {
+      setMicSilent(false);
+      return;
+    }
+    recPeak.current = 0;
+    const t = setTimeout(() => setMicSilent(recPeak.current < MIC_SILENT_LEVEL), 8000);
+    return () => clearTimeout(t);
+  }, [isRecording]);
   useEffect(() => {
     void refreshMics();
     navigator.mediaDevices?.addEventListener?.('devicechange', refreshMics);
@@ -2148,6 +2237,12 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
                 <div style={{ width: 'min(420px, 90vw)' }}>
                   <MicLevel stream={paused ? null : liveStream} />
                 </div>
+                {micSilent && !paused && (
+                  <p role="alert" style={{ margin: 0, color: '#e0a09e', textAlign: 'center', maxWidth: 520 }}>
+                    The app can't hear you. Press I'm done, then check the Microphone in the Session panel
+                    — the level bar there should move when you speak.
+                  </p>
+                )}
                 <div className="flex gap-3 flex-wrap justify-center">
                   <button
                     className="btn cut-sm"
@@ -2218,16 +2313,15 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
         </div>
       )}
 
-      <div className="flex justify-start" style={{ marginBottom: 'var(--gap)' }}>
-        <button className="btn btn-primary cut-sm" disabled={isRecording} onClick={() => setCalm(true)}>
-          <span className="flex items-center gap-2">
-            <Mic className="w-4 h-4" />
-            Start a session
-          </span>
-        </button>
-      </div>
-
       <VaultLayout
+        toolbar={
+          <button className="btn btn-primary cut-sm" disabled={isRecording} onClick={() => setCalm(true)}>
+            <span className="flex items-center gap-2">
+              <Mic className="w-4 h-4" />
+              Start a session
+            </span>
+          </button>
+        }
         panels={{
           vault: (
             <Frame title="The Vault">
@@ -2272,6 +2366,11 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
                   Prompt me for more
                 </button>
                 {!wsReady && <span className="fhint">Companion offline — reconnecting…</span>}
+              {isRecording && micSilent && (
+                <span className="fhint" role="alert" style={{ margin: 0, color: '#e0a09e' }}>
+                  The app can't hear you. Stop, and check the Microphone in the Session panel.
+                </span>
+              )}
               {isRecording && liveState && (
                 <span className="fhint" role="status" style={{ margin: 0 }}>
                   {liveState === 'listening'
@@ -2305,7 +2404,27 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
                     onChange={setMicId}
                     groups={[{ options: mics.length ? mics : [{ value: 'default', label: 'Default microphone' }] }]}
                   />
-                  <MicLevel stream={liveStream} />
+                  <MicLevel
+                    stream={liveStream || testStream}
+                    onLevel={v => {
+                      if (testStream) testPeak.current = Math.max(testPeak.current, v);
+                      if (liveStream) {
+                        recPeak.current = Math.max(recPeak.current, v);
+                        if (v >= MIC_SILENT_LEVEL && micSilent) setMicSilent(false);
+                      }
+                    }}
+                  />
+                  <div className="flex gap-2 flex-wrap" style={{ marginTop: 6 }}>
+                    {micNamesHidden && (
+                      <button type="button" className="btn btn-sm cut-sm" onClick={() => void showMicNames()}>
+                        Show microphone names
+                      </button>
+                    )}
+                    <button type="button" className="btn btn-sm cut-sm" disabled={isRecording} onClick={() => void testMic()}>
+                      {testStream ? 'Stop test' : 'Test microphone'}
+                    </button>
+                  </div>
+                  {testVerdict && <span className="fhint">{testVerdict}</span>}
                 </div>
                 <div className="field">
                   <label htmlFor="pick-cleanup">Sound cleanup</label>
@@ -3593,6 +3712,7 @@ function ReadingSession({ script, done, onClose, onSaved }: {
   const [error, setError] = useState<string | null>(null);
   const recRef = useRef<MediaRecorder | null>(null);
   const chunks = useRef<Blob[]>([]);
+  const clipPeak = useRef(0);
   const line = script[i];
 
   // One microphone for the whole session, with the Session panel's settings.
@@ -3614,12 +3734,21 @@ function ReadingSession({ script, done, onClose, onSaved }: {
   const start = () => {
     if (!stream || !line) return;
     chunks.current = [];
+    clipPeak.current = 0;
     const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find(t => MediaRecorder.isTypeSupported?.(t));
     const rec = new MediaRecorder(stream, { audioBitsPerSecond: 64000, ...(mime ? { mimeType: mime } : {}) });
     rec.ondataavailable = e => e.data.size && chunks.current.push(e.data);
     rec.onstop = async () => {
       const type = rec.mimeType || mime || 'audio/webm';
       const blob = new Blob(chunks.current, { type });
+      if (clipPeak.current < MIC_VOICE_LEVEL) {
+        setError(
+          clipPeak.current < MIC_SILENT_LEVEL
+            ? 'Nothing was heard — the microphone is not reaching the app. Nothing was saved. Stop for now and check the Microphone in the Session panel.'
+            : 'That was too quiet to use, so it was not saved. Move closer to the microphone and read it again.',
+        );
+        return;
+      }
       setSaving(true);
       try {
         const fd = new FormData();
@@ -3700,7 +3829,12 @@ function ReadingSession({ script, done, onClose, onSaved }: {
       )}
 
       <div style={{ width: 'min(420px, 90vw)' }}>
-        <MicLevel stream={recording ? stream : null} />
+        <MicLevel
+          stream={stream}
+          onLevel={v => {
+            if (recording) clipPeak.current = Math.max(clipPeak.current, v);
+          }}
+        />
       </div>
 
       <div className="flex items-center gap-3 flex-wrap justify-center">
@@ -3734,8 +3868,15 @@ function VoicePanel() {
   const [error, setError] = useState<string | null>(null);
   const [applied, setApplied] = useState(false);
 
+  const [asideNote, setAsideNote] = useState<string | null>(null);
   const load = async () => {
     try {
+      const c = await (await fetch('/api/voice/check', { method: 'POST' })).json();
+      if (c.success && c.silent?.length) {
+        setAsideNote(
+          `${c.silent.length} of your recordings were silent — the microphone was not hearing you. They have been set aside, and those sentences are ready to read again. Use Test microphone in the Session panel first.`,
+        );
+      }
       const d = await (await fetch('/api/voice')).json();
       if (d.success) {
         setScript(d.script);
@@ -3825,6 +3966,12 @@ function VoicePanel() {
         difference; you can stop and carry on another day.
       </p>
 
+      {asideNote && (
+        <div className="callout warn" style={{ margin: '0 0 var(--gap)' }}>
+          <span className="cd" />
+          <span>{asideNote}</span>
+        </div>
+      )}
       <div className="flex gap-6 flex-wrap" style={{ margin: '4px 0 var(--gap)' }}>
         <span className="fhint" style={{ margin: 0 }}>
           <b>{read}</b> of {script.length} sentences read · about <b>{minutes}</b> min of your voice
