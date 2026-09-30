@@ -6,7 +6,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 ## [Unreleased]
 
 ### Added
+- **Microphone** and **Sound cleanup** settings in the Session panel, plus a live level meter. With cleanup Off, a good USB microphone reaches the transcriber untouched, without the browser's phone-call filters.
 - The vault page's panels can be rearranged. **Arrange panels** lets you drag a panel by its grip (touch works too), move it with the arrows, or send it to the other column. **Reset layout** undoes it all. The layout is remembered in each browser, so your phone and desktop can differ.
+
+### Fixed
+- **Live transcription stopped at the first pause.** Everything said after the first pause in a recording was thrown away. Now it listens to the end, however long the pauses are. It is also told the language, which it wasn't before.
+- Transcript sentences no longer run together ("word.Word").
+
+### Changed
+- Spoken language is Greek or English, with no Auto-detect. Greek is the default, and the choice is remembered.
 
 ## [1.1.0] - 2026-09-25
 

@@ -299,7 +299,7 @@ async function startServer() {
       const config = await loadConfig();
       const result = await transcribe(config, req.file.buffer, req.file.mimetype || 'audio/webm', {
         engine: req.body?.engine,
-        language: req.body?.language,
+        language: req.body?.language === 'en' ? 'en' : 'el',
       });
 
       // What came off the recording, before anything tidied it.

@@ -757,12 +757,111 @@ const STYLES: PickerGroup[] = [
 const LANGUAGES: PickerGroup[] = [
   {
     options: [
-      { value: 'auto', label: 'Auto (detect)' },
       { value: 'el', label: 'Greek' },
       { value: 'en', label: 'English' },
     ],
   },
 ];
+
+/* =============================================================================
+   MICROPHONE — which input, and whether the browser may "clean" it.
+
+   Browsers treat every microphone as a phone call: echo cancelling, noise
+   suppression and automatic volume are on unless asked otherwise. On a laptop
+   mic in a noisy room that helps. On a good USB microphone it hurts: quiet,
+   slow speech is squashed and the ends of words are cut, and the transcriber
+   hears worse audio than the microphone captured. Both settings are kept per
+   browser, because a phone and a desk microphone want opposite answers.
+   ========================================================================== */
+
+const MIC_KEY = 'mystory.mic';
+const CLEANUP_KEY = 'mystory.micCleanup';
+
+const CLEANUP: PickerGroup[] = [
+  {
+    options: [
+      { value: 'off', label: 'Off — a good microphone (USB, studio, headset)' },
+      { value: 'on', label: 'On — phone or laptop mic, noisy room' },
+    ],
+  },
+];
+
+function readPref(key: string, fallback: string): string {
+  try {
+    return localStorage.getItem(key) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+function writePref(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {}
+}
+
+/** Audio constraints for getUserMedia from the two settings. */
+function micConstraints(deviceId: string, cleanup: string): MediaTrackConstraints | true {
+  const clean = cleanup === 'on';
+  return {
+    ...(deviceId && deviceId !== 'default' ? { deviceId: { exact: deviceId } } : {}),
+    echoCancellation: clean,
+    noiseSuppression: clean,
+    autoGainControl: clean,
+    channelCount: 1,
+  };
+}
+
+/** A live level bar, so "is it hearing me?" is answered by looking. */
+function MicLevel({ stream }: { stream: MediaStream | null }) {
+  const [level, setLevel] = useState(0);
+  useEffect(() => {
+    if (!stream) {
+      setLevel(0);
+      return;
+    }
+    const ctx = new AudioContext();
+    // Some browsers start it suspended until a gesture; the Record press was one.
+    void ctx.resume().catch(() => {});
+    const src = ctx.createMediaStreamSource(stream);
+    const an = ctx.createAnalyser();
+    an.fftSize = 1024;
+    src.connect(an);
+    const buf = new Float32Array(an.fftSize);
+    let raf = 0;
+    const tick = () => {
+      an.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (const v of buf) sum += v * v;
+      // RMS to a 0..1 scale that reads well for speech.
+      setLevel(Math.min(1, Math.sqrt(sum / buf.length) * 6));
+      raf = requestAnimationFrame(tick);
+    };
+    tick();
+    return () => {
+      cancelAnimationFrame(raf);
+      void ctx.close();
+    };
+  }, [stream]);
+  return (
+    <div
+      role="meter"
+      aria-label="Microphone level"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(level * 100)}
+      style={{ height: 6, background: 'rgba(255,255,255,0.08)', borderRadius: 3, overflow: 'hidden', marginTop: 6 }}
+    >
+      <div
+        style={{
+          width: `${Math.round(level * 100)}%`,
+          height: '100%',
+          background: level > 0.9 ? '#c0504d' : 'var(--accent, #b8914a)',
+          transition: 'width 60ms linear',
+        }}
+      />
+    </div>
+  );
+}
 
 /* =============================================================================
    VAULT LAYOUT — the vault page's panels, in the order the writer chose.
@@ -981,8 +1080,45 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [sessionName, setSessionName] = useState('');
-  const [language, setLanguage] = useState('auto');
+  // Greek or English, never "detect": guessing the language wrong is the
+  // single easiest way to get a transcript that is nonsense throughout.
+  const [language, setLanguage] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('mystory.language');
+      return saved === 'en' ? 'en' : 'el';
+    } catch {
+      return 'el';
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('mystory.language', language);
+    } catch {}
+  }, [language]);
   const [engine, setEngine] = useState('auto');
+  const [micId, setMicId] = useState<string>(() => readPref(MIC_KEY, 'default'));
+  const [cleanup, setCleanup] = useState<string>(() => readPref(CLEANUP_KEY, 'off'));
+  const [mics, setMics] = useState<{ value: string; label: string }[]>([]);
+  const [liveStream, setLiveStream] = useState<MediaStream | null>(null);
+  useEffect(() => writePref(MIC_KEY, micId), [micId]);
+  useEffect(() => writePref(CLEANUP_KEY, cleanup), [cleanup]);
+
+  // Device names are only visible after the microphone has been allowed once,
+  // so the list is refreshed on load and again whenever a recording starts.
+  const refreshMics = useCallback(async () => {
+    try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      const inputs = all
+        .filter(d => d.kind === 'audioinput' && d.deviceId !== 'communications')
+        .map((d, i) => ({ value: d.deviceId || 'default', label: d.label || `Microphone ${i + 1}` }));
+      setMics(inputs);
+    } catch {}
+  }, []);
+  useEffect(() => {
+    void refreshMics();
+    navigator.mediaDevices?.addEventListener?.('devicechange', refreshMics);
+    return () => navigator.mediaDevices?.removeEventListener?.('devicechange', refreshMics);
+  }, [refreshMics]);
   const [detectedTags, setDetectedTags] = useState<string[]>([]);
   const [detectedIndicators, setDetectedIndicators] = useState<Indicator[]>([]);
   const [style, setStyle] = useState<string>(() => localStorage.getItem('mystory.style') || 'corrected');
@@ -1310,6 +1446,7 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   const stopStream = () => {
     streamRef.current?.getTracks().forEach(t => t.stop());
     streamRef.current = null;
+    setLiveStream(null);
   };
 
   const toggleRecording = async () => {
@@ -1330,8 +1467,18 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
     // lit after recording had stopped.
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(micId, cleanup) });
+      } catch (e: any) {
+        // The chosen microphone was unplugged: record with the default one
+        // rather than not at all.
+        if (e?.name !== 'OverconstrainedError' && e?.name !== 'NotFoundError') throw e;
+        stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints('default', cleanup) });
+        triggerAlert('The chosen microphone was not found, so the default one is recording.', 'error');
+      }
       streamRef.current = stream;
+      setLiveStream(stream);
+      void refreshMics();
     } catch (err) {
       console.error('Microphone permission error:', err);
       triggerAlert(
@@ -1353,7 +1500,7 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
       recognitionRef.current = new SpeechRecognition();
       recognitionRef.current.continuous = true;
       recognitionRef.current.interimResults = true;
-      if (language !== 'auto') recognitionRef.current.lang = language === 'el' ? 'el-GR' : 'en-US';
+      recognitionRef.current.lang = language === 'en' ? 'en-US' : 'el-GR';
 
       recognitionRef.current.onresult = (event: any) => {
         let finalResult = '';
@@ -1714,6 +1861,21 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
                 <div className="field">
                   <label htmlFor="pick-lang">Spoken language</label>
                   <Picker id="pick-lang" value={language} onChange={setLanguage} groups={LANGUAGES} />
+                </div>
+                <div className="field">
+                  <label htmlFor="pick-mic">Microphone</label>
+                  <Picker
+                    id="pick-mic"
+                    value={mics.some(m => m.value === micId) ? micId : 'default'}
+                    onChange={setMicId}
+                    groups={[{ options: mics.length ? mics : [{ value: 'default', label: 'Default microphone' }] }]}
+                  />
+                  <MicLevel stream={liveStream} />
+                </div>
+                <div className="field">
+                  <label htmlFor="pick-cleanup">Sound cleanup</label>
+                  <Picker id="pick-cleanup" value={cleanup} onChange={setCleanup} groups={CLEANUP} />
+                  <span className="fhint">Off gives a good microphone's sound to the transcriber untouched.</span>
                 </div>
                 <div className="field">
                   <label htmlFor="pick-style">How to write it down</label>
