@@ -2442,11 +2442,14 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
                     }}
                   />
                   <div className="flex gap-2 flex-wrap" style={{ marginTop: 6 }}>
-                    {micNamesHidden && (
-                      <button type="button" className="btn btn-sm cut-sm" onClick={() => void showMicNames()}>
-                        Show microphone names
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      className="btn btn-sm cut-sm"
+                      onClick={() => void showMicNames()}
+                      title="Lists every microphone by name (asks for access the first time)"
+                    >
+                      {micNamesHidden ? 'Show microphone names' : 'Find microphones'}
+                    </button>
                     <button type="button" className="btn btn-sm cut-sm" disabled={isRecording} onClick={() => void testMic()}>
                       {testStream ? 'Stop test' : 'Test microphone'}
                     </button>
@@ -3725,12 +3728,14 @@ interface MeasureResult {
 }
 
 /** The reading screen: full window, one sentence, one button. */
-function ReadingSession({ script, done, onClose, onSaved, setId }: {
+function ReadingSession({ script, done, onClose, onSaved, setId, micId }: {
   script: ScriptLine[];
   done: Set<number>;
   onClose: () => void;
   onSaved: (n: number) => void;
   setId: string;
+  /** The set's own microphone; otherwise the Vault's choice. */
+  micId?: string;
 }) {
   const firstTodo = script.findIndex(l => !done.has(l.n));
   const [i, setI] = useState(firstTodo < 0 ? 0 : firstTodo);
@@ -3752,7 +3757,7 @@ function ReadingSession({ script, done, onClose, onSaved, setId }: {
       try {
         const cleanup = readPref(CLEANUP_KEY, 'off');
         s = await navigator.mediaDevices.getUserMedia({
-          audio: micConstraints(readPref(MIC_KEY, 'default'), cleanup),
+          audio: micConstraints(micId || readPref(MIC_KEY, 'default'), cleanup),
         });
         setStream(s);
         // What the browser actually applied, which is not always what was
@@ -3920,6 +3925,7 @@ function ReadingSession({ script, done, onClose, onSaved, setId }: {
 interface SetRow {
   id: string;
   name: string;
+  micId?: string;
   limit?: number;
   mic?: string;
   applied?: { autoGainControl?: boolean; noiseSuppression?: boolean };
@@ -3935,6 +3941,27 @@ function VoicePanel() {
   const [sets, setSets] = useState<SetRow[]>([]);
   const [newName, setNewName] = useState('');
   const [quick, setQuick] = useState(true);
+  const [mics, setMics] = useState<{ value: string; label: string }[]>([]);
+  const [newMic, setNewMic] = useState<string>(() => readPref(MIC_KEY, 'default'));
+  const findMics = async (ask: boolean) => {
+    try {
+      if (ask) (await navigator.mediaDevices.getUserMedia({ audio: true })).getTracks().forEach(t => t.stop());
+      const all = await navigator.mediaDevices.enumerateDevices();
+      setMics(
+        all
+          .filter(d => d.kind === 'audioinput' && d.deviceId !== 'communications')
+          .map((d, i) => ({ value: d.deviceId || 'default', label: d.label || `Microphone ${i + 1}` })),
+      );
+    } catch {
+      setError('The browser did not allow the microphone. Allow it in the address bar, then Find microphones again.');
+    }
+  };
+  useEffect(() => {
+    void findMics(false);
+  }, []);
+  // Sets ticked for measuring, measured one after another.
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [queue, setQueue] = useState<string[]>([]);
   const [script, setScript] = useState<ScriptLine[]>([]);
   const [done, setDone] = useState<Set<number>>(new Set());
   const [minutes, setMinutes] = useState(0);
@@ -3979,7 +4006,13 @@ function VoicePanel() {
         await fetch('/api/voice/sets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: newName.trim() || undefined, limit: quick ? 15 : undefined, cleanup: readPref(CLEANUP_KEY, 'off') }),
+          body: JSON.stringify({
+            name: newName.trim() || mics.find(m => m.value === newMic)?.label || undefined,
+            limit: quick ? 15 : undefined,
+            cleanup: readPref(CLEANUP_KEY, 'off'),
+            micId: newMic,
+            mic: mics.find(m => m.value === newMic)?.label,
+          }),
         })
       ).json();
       if (!d.success) throw new Error(d.error);
@@ -4022,12 +4055,12 @@ function VoicePanel() {
     }
   };
 
-  const startMeasure = async () => {
+  const startMeasure = async (target = setId) => {
     setError(null);
     setApplied(false);
     try {
       const d = await (
-        await fetch('/api/voice/measure', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sample: 15, set: setId }) })
+        await fetch('/api/voice/measure', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sample: 15, set: target }) })
       ).json();
       if (!d.success) throw new Error(d.error);
       setMeasure(d.measure);
@@ -4035,6 +4068,24 @@ function VoicePanel() {
       setError(e.message || String(e));
     }
   };
+
+  // The ticked sets, one after another; the table fills in as each finishes.
+  const measurePicked = () => {
+    const [first, ...rest] = [...picked];
+    if (!first) return;
+    setQueue(rest);
+    void startMeasure(first);
+  };
+  useEffect(() => {
+    if (measure && !measure.running) {
+      void load();
+      if (queue.length) {
+        const [next, ...rest] = queue;
+        setQueue(rest);
+        void startMeasure(next);
+      }
+    }
+  }, [measure?.running]);
 
   const ranked = (measure?.results || [])
     .filter(r => r.wer !== null)
@@ -4081,6 +4132,7 @@ function VoicePanel() {
           <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 8 }}>
             <thead>
               <tr className="fhint" style={{ textAlign: 'left' }}>
+                <th style={{ padding: '4px 8px 4px 0' }} title="Tick the sets to measure">Measure</th>
                 <th style={{ padding: '4px 8px 4px 0' }}>Set</th>
                 <th style={{ padding: 4 }}>Microphone</th>
                 <th style={{ padding: 4 }}>Read</th>
@@ -4097,6 +4149,19 @@ function VoicePanel() {
                   style={{ cursor: 'pointer', borderTop: '1px solid rgba(255,255,255,0.06)', background: x.id === setId ? 'rgba(184,145,74,0.12)' : undefined }}
                   aria-selected={x.id === setId}
                 >
+                  <td style={{ padding: '6px 8px 6px 0' }} onClick={e => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      aria-label={`Measure ${x.name}`}
+                      disabled={x.clips < 5}
+                      checked={picked.has(x.id)}
+                      onChange={e => {
+                        const next = new Set(picked);
+                        e.target.checked ? next.add(x.id) : next.delete(x.id);
+                        setPicked(next);
+                      }}
+                    />
+                  </td>
                   <td style={{ padding: '6px 8px 6px 0' }}>{x.id === setId ? '▸ ' : ''}{x.name}</td>
                   <td style={{ padding: 4 }} className="fhint">{x.mic || '—'}</td>
                   <td style={{ padding: 4 }}>{x.clips}{x.limit ? ` / ${x.limit}` : ''}</td>
@@ -4120,6 +4185,17 @@ function VoicePanel() {
               onKeyDown={e => e.key === 'Enter' && void newSet()}
             />
           </span>
+          <span style={{ flex: '1 1 220px' }}>
+            <Picker
+              id="pick-set-mic"
+              value={mics.some(m => m.value === newMic) ? newMic : 'default'}
+              onChange={setNewMic}
+              groups={[{ options: mics.length ? mics : [{ value: 'default', label: 'Default microphone' }] }]}
+            />
+          </span>
+          <button type="button" className="btn btn-sm cut-sm" onClick={() => void findMics(true)}>
+            Find microphones
+          </button>
           <label className="flex items-center gap-2 fhint" style={{ margin: 0, cursor: 'pointer' }}>
             <input type="checkbox" checked={quick} onChange={e => setQuick(e.target.checked)} />
             Quick mic test (15)
@@ -4158,9 +4234,20 @@ function VoicePanel() {
           Runs a sample of your sentences through every transcription engine you have and counts
           the words each gets wrong. Takes a few minutes.
         </p>
-        <button className="btn cut-sm" disabled={read < 5 || !!measure?.running} onClick={() => void startMeasure()}>
-          {measure?.running ? `Measuring… ${measure.done} of ${measure.total}` : read < 5 ? 'Read 5 sentences first' : 'Measure'}
-        </button>
+        <div className="flex gap-2 flex-wrap">
+          <button className="btn cut-sm" disabled={read < 5 || !!measure?.running} onClick={() => void startMeasure()}>
+            {measure?.running
+              ? `Measuring ${sets.find(x => x.id === (measure as any).set)?.name || ''}… ${measure.done} of ${measure.total}${queue.length ? ` (then ${queue.length} more)` : ''}`
+              : read < 5
+                ? 'Read 5 sentences first'
+                : `Measure ${current?.name || 'this set'}`}
+          </button>
+          {picked.size > 0 && !measure?.running && (
+            <button className="btn btn-primary cut-sm" onClick={measurePicked}>
+              Measure the ticked sets ({picked.size})
+            </button>
+          )}
+        </div>
 
         {ranked.length > 0 && !measure?.running && (
           <div style={{ marginTop: 'var(--gap)' }}>
@@ -4212,6 +4299,7 @@ function VoicePanel() {
       {reading && (
         <ReadingSession
           setId={setId}
+          micId={current?.micId}
           script={readable}
           done={done}
           onSaved={n => setDone(d => new Set(d).add(n))}
