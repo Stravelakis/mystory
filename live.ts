@@ -154,6 +154,42 @@ export function toPcm16k(input: Buffer): Promise<Buffer> {
   });
 }
 
+/** Ways to prepare a recording before a transcriber hears it (ffmpeg
+ *  filter chains). Chosen by measuring them on real clips with known text,
+ *  not by taste: see AUDIO_CLEANUP_DEFAULT. */
+export const AUDIO_CLEANUP: Record<string, string> = {
+  off: '',
+  rumble: 'highpass=f=100',
+  level: 'highpass=f=100,loudnorm=I=-20:TP=-2',
+  denoise: 'highpass=f=100,afftdn=nr=12:nf=-40,loudnorm=I=-20:TP=-2',
+};
+
+/** The recording as 16 kHz mono WAV, through a cleanup chain. What was
+ *  recorded is untouched on disk; only the transcriber's copy changes. */
+export function prepareAudio(input: Buffer, chain: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const args = ['-hide_banner', '-loglevel', 'error', '-i', 'pipe:0'];
+    if (chain) args.push('-af', chain);
+    args.push('-ac', '1', '-ar', '16000', '-f', 'wav', 'pipe:1');
+    let proc;
+    try {
+      proc = spawn('ffmpeg', args);
+    } catch (e) {
+      return reject(e);
+    }
+    const chunks: Buffer[] = [];
+    let err = '';
+    proc.stdout.on('data', (d: Buffer) => chunks.push(d));
+    proc.stderr.on('data', (d: Buffer) => (err += d.toString()));
+    proc.on('error', reject);
+    proc.on('close', code =>
+      code === 0 && chunks.length ? resolve(Buffer.concat(chunks)) : reject(new Error(err.trim() || `ffmpeg exit ${code}`)),
+    );
+    proc.stdin.on('error', () => {});
+    proc.stdin.end(input);
+  });
+}
+
 async function streamAudio(session: any, pcm: Buffer) {
   // ~100 ms per chunk, as a microphone would send it. Faster than real time
   // is fine; one giant chunk is not.

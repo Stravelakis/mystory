@@ -872,6 +872,29 @@ const MIC_SILENT_LEVEL = 0.005;
 /** A read sentence peaks well above this; silence and hum stay under it. */
 const MIC_VOICE_LEVEL = 0.03;
 
+/** What a microphone test found, in words someone can act on. Levels are the
+ *  meter's (RMS × 6), one per animation frame over the test. The background
+ *  is the quietest tenth of the test, the voice the loudest twentieth. On
+ *  30 Sep 2026 real clips measured about -45 dB speech on a -42 dB noise
+ *  floor: understandable to a person, guesswork for every transcriber. */
+function micVerdict(levels: number[]): string {
+  if (levels.length < 10) return 'The test was too short. Try again.';
+  const sorted = [...levels].sort((a, b) => a - b);
+  const noise = Math.max(1e-4, sorted[Math.floor(sorted.length * 0.1)]);
+  const voice = sorted[Math.floor(sorted.length * 0.95)];
+  const gap = Math.round(20 * Math.log10(voice / noise));
+  if (voice < MIC_SILENT_LEVEL) {
+    return 'Nothing is reaching the app from this microphone. Pick another one, or check it is plugged in and not muted (Windows: Settings → System → Sound → Input).';
+  }
+  if (voice < 0.12) {
+    return `Your voice arrives very quietly. Turn the input volume up (Windows: Settings → System → Sound → Input → this microphone → Volume, near 100), speak into the FRONT of the microphone (for the M-Audio Uber Mic, the side with the logo, pattern set to the single-heart "cardioid" symbol), about a hand's width away. (Voice is ${gap} dB above the background.)`;
+  }
+  if (gap < 25) {
+    return `Your voice is only ${gap} dB above the background noise; transcription needs 30 or more. Move away from fans and the laptop, put the microphone on something soft so the desk does not rumble through it, and use the cardioid pattern. Or try Sound cleanup: On.`;
+  }
+  return `Good: your voice is ${gap} dB above the background. ✓`;
+}
+
 function MicLevel({ stream, onLevel }: { stream: MediaStream | null; onLevel?: (level: number) => void }) {
   const onLevelRef = useRef(onLevel);
   onLevelRef.current = onLevel;
@@ -1354,7 +1377,12 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
       // A silent path to the speakers keeps the graph running; nothing is heard.
       const mute = ctx.createGain();
       mute.gain.value = 0;
-      src.connect(lowpass).connect(node).connect(mute).connect(ctx.destination);
+      // The rumble below 100 Hz (desk, fans) was louder than the voice in
+      // some real recordings; cutting it measurably helped the Live model.
+      const highpass = ctx.createBiquadFilter();
+      highpass.type = 'highpass';
+      highpass.frequency.value = 100;
+      src.connect(highpass).connect(lowpass).connect(node).connect(mute).connect(ctx.destination);
     } catch (e) {
       console.error('Live words could not start:', e);
       setLiveState('failed');
@@ -1409,14 +1437,16 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   const [testStream, setTestStream] = useState<MediaStream | null>(null);
   const [testVerdict, setTestVerdict] = useState<string | null>(null);
   const testPeak = useRef(0);
+  const testLevels = useRef<number[]>([]);
   const testMic = async () => {
     if (testStream) {
       testStream.getTracks().forEach(t => t.stop());
       setTestStream(null);
       return;
     }
-    setTestVerdict('Say something…');
+    setTestVerdict('Say this aloud, as you normally speak: «Σήμερα έχει υπέροχο καιρό για μια βόλτα στη θάλασσα.»');
     testPeak.current = 0;
+    testLevels.current = [];
     try {
       const s = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(micId, cleanup) });
       setTestStream(s);
@@ -1424,14 +1454,8 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
       setTimeout(() => {
         s.getTracks().forEach(t => t.stop());
         setTestStream(null);
-        setTestVerdict(
-          testPeak.current >= MIC_VOICE_LEVEL
-            ? 'It hears you. ✓'
-            : testPeak.current >= MIC_SILENT_LEVEL
-              ? 'It hears the room but hardly any voice. Move closer, or turn the microphone gain up.'
-              : 'Nothing is reaching the app from this microphone. Pick another one, or check it is plugged in and not muted.',
-        );
-      }, 5000);
+        setTestVerdict(micVerdict(testLevels.current));
+      }, 7000);
     } catch {
       setTestVerdict('This microphone could not be opened. Pick another one.');
     }
@@ -2407,7 +2431,10 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
                   <MicLevel
                     stream={liveStream || testStream}
                     onLevel={v => {
-                      if (testStream) testPeak.current = Math.max(testPeak.current, v);
+                      if (testStream) {
+                        testPeak.current = Math.max(testPeak.current, v);
+                        testLevels.current.push(v);
+                      }
                       if (liveStream) {
                         recPeak.current = Math.max(recPeak.current, v);
                         if (v >= MIC_SILENT_LEVEL && micSilent) setMicSilent(false);
@@ -3698,11 +3725,12 @@ interface MeasureResult {
 }
 
 /** The reading screen: full window, one sentence, one button. */
-function ReadingSession({ script, done, onClose, onSaved }: {
+function ReadingSession({ script, done, onClose, onSaved, setId }: {
   script: ScriptLine[];
   done: Set<number>;
   onClose: () => void;
   onSaved: (n: number) => void;
+  setId: string;
 }) {
   const firstTodo = script.findIndex(l => !done.has(l.n));
   const [i, setI] = useState(firstTodo < 0 ? 0 : firstTodo);
@@ -3713,6 +3741,8 @@ function ReadingSession({ script, done, onClose, onSaved }: {
   const recRef = useRef<MediaRecorder | null>(null);
   const chunks = useRef<Blob[]>([]);
   const clipPeak = useRef(0);
+  const clipLevels = useRef<number[]>([]);
+  const [agcWarning, setAgcWarning] = useState(false);
   const line = script[i];
 
   // One microphone for the whole session, with the Session panel's settings.
@@ -3720,10 +3750,21 @@ function ReadingSession({ script, done, onClose, onSaved }: {
     let s: MediaStream | null = null;
     void (async () => {
       try {
+        const cleanup = readPref(CLEANUP_KEY, 'off');
         s = await navigator.mediaDevices.getUserMedia({
-          audio: micConstraints(readPref(MIC_KEY, 'default'), readPref(CLEANUP_KEY, 'off')),
+          audio: micConstraints(readPref(MIC_KEY, 'default'), cleanup),
         });
         setStream(s);
+        // What the browser actually applied, which is not always what was
+        // asked for: Chrome can keep automatic volume on regardless.
+        const track = s.getAudioTracks()[0];
+        const applied = (track?.getSettings?.() || {}) as any;
+        if (cleanup === 'off' && applied.autoGainControl === true) setAgcWarning(true);
+        void fetch(`/api/voice/sets/${setId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mic: track?.label || '', applied, cleanup }),
+        }).catch(() => {});
       } catch {
         setError('The microphone could not be opened. Check the Microphone choice in the Session panel.');
       }
@@ -3735,6 +3776,7 @@ function ReadingSession({ script, done, onClose, onSaved }: {
     if (!stream || !line) return;
     chunks.current = [];
     clipPeak.current = 0;
+    clipLevels.current = [];
     const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find(t => MediaRecorder.isTypeSupported?.(t));
     const rec = new MediaRecorder(stream, { audioBitsPerSecond: 64000, ...(mime ? { mimeType: mime } : {}) });
     rec.ondataavailable = e => e.data.size && chunks.current.push(e.data);
@@ -3751,9 +3793,16 @@ function ReadingSession({ script, done, onClose, onSaved }: {
       }
       setSaving(true);
       try {
+        // Voice above background for this clip: loudest twentieth against the
+        // quietest tenth of the meter's readings while it recorded.
+        const lv = [...clipLevels.current].sort((a, b) => a - b);
+        const gapDb = lv.length > 10
+          ? 20 * Math.log10(lv[Math.floor(lv.length * 0.95)] / Math.max(1e-4, lv[Math.floor(lv.length * 0.1)]))
+          : NaN;
         const fd = new FormData();
+        if (Number.isFinite(gapDb)) fd.append('gapDb', String(Math.round(gapDb)));
         fd.append('audio', blob, `clip.${type.includes('mp4') ? 'm4a' : 'webm'}`);
-        const d = await (await fetch(`/api/voice/clips/${line.n}`, { method: 'POST', body: fd })).json();
+        const d = await (await fetch(`/api/voice/clips/${line.n}?set=${setId}`, { method: 'POST', body: fd })).json();
         if (!d.success) throw new Error(d.error || 'The clip was not saved.');
         onSaved(line.n);
         setI(x => Math.min(x + 1, script.length - 1));
@@ -3832,7 +3881,10 @@ function ReadingSession({ script, done, onClose, onSaved }: {
         <MicLevel
           stream={stream}
           onLevel={v => {
-            if (recording) clipPeak.current = Math.max(clipPeak.current, v);
+            if (recording) {
+              clipPeak.current = Math.max(clipPeak.current, v);
+              clipLevels.current.push(v);
+            }
           }}
         />
       </div>
@@ -3853,12 +3905,36 @@ function ReadingSession({ script, done, onClose, onSaved }: {
         {done.has(line?.n ?? -1) ? ' This one is already recorded; reading it again replaces it.' : ''}
       </p>
       {error && <p className="fhint" style={{ color: '#e0a09e' }}>{error}</p>}
+      {agcWarning && (
+        <p className="fhint" style={{ color: '#e0c09e', maxWidth: 560, textAlign: 'center' }}>
+          The browser kept its automatic volume on, although it was asked not to — that is the
+          "sometimes loud, mostly turned down" effect. This set will record that, so it can be
+          compared with others.
+        </p>
+      )}
     </div>,
     document.body,
   );
 }
 
+interface SetRow {
+  id: string;
+  name: string;
+  limit?: number;
+  mic?: string;
+  applied?: { autoGainControl?: boolean; noiseSuppression?: boolean };
+  cleanup?: string;
+  clips: number;
+  gapDb: number | null;
+  best: { label: string; wer: number } | null;
+}
+
 function VoicePanel() {
+  const [setId, setSetId] = useState<string>(() => readPref('mystory.voiceSet', 's1'));
+  useEffect(() => writePref('mystory.voiceSet', setId), [setId]);
+  const [sets, setSets] = useState<SetRow[]>([]);
+  const [newName, setNewName] = useState('');
+  const [quick, setQuick] = useState(true);
   const [script, setScript] = useState<ScriptLine[]>([]);
   const [done, setDone] = useState<Set<number>>(new Set());
   const [minutes, setMinutes] = useState(0);
@@ -3877,11 +3953,13 @@ function VoicePanel() {
           `${c.silent.length} of your recordings were silent — the microphone was not hearing you. They have been set aside, and those sentences are ready to read again. Use Test microphone in the Session panel first.`,
         );
       }
-      const d = await (await fetch('/api/voice')).json();
+      const d = await (await fetch(`/api/voice?set=${setId}`)).json();
       if (d.success) {
         setScript(d.script);
         setDone(new Set(d.clips));
         setMinutes(d.minutes);
+        setSets(d.sets || []);
+        if (d.sets?.length && !d.sets.some((x: SetRow) => x.id === setId)) setSetId(d.sets[d.sets.length - 1].id);
       }
       const m = await (await fetch('/api/voice/measure')).json();
       if (m.success) setMeasure(m.measure);
@@ -3889,7 +3967,28 @@ function VoicePanel() {
   };
   useEffect(() => {
     void load();
-  }, []);
+  }, [setId]);
+
+  const current = sets.find(x => x.id === setId);
+  const readable = current?.limit ? script.slice(0, current.limit) : script;
+
+  const newSet = async () => {
+    setError(null);
+    try {
+      const d = await (
+        await fetch('/api/voice/sets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newName.trim() || undefined, limit: quick ? 15 : undefined, cleanup: readPref(CLEANUP_KEY, 'off') }),
+        })
+      ).json();
+      if (!d.success) throw new Error(d.error);
+      setNewName('');
+      setSetId(d.set.id);
+    } catch (e: any) {
+      setError(e.message || String(e));
+    }
+  };
 
   // Poll while a measurement runs.
   useEffect(() => {
@@ -3928,7 +4027,7 @@ function VoicePanel() {
     setApplied(false);
     try {
       const d = await (
-        await fetch('/api/voice/measure', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sample: 15 }) })
+        await fetch('/api/voice/measure', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sample: 15, set: setId }) })
       ).json();
       if (!d.success) throw new Error(d.error);
       setMeasure(d.measure);
@@ -3953,7 +4052,7 @@ function VoicePanel() {
     else setError(d.error);
   };
 
-  const read = done.size;
+  const read = readable.filter(l => done.has(l.n)).length;
   const pct = (x: number) => `${Math.round(x * 100)}%`;
 
   return (
@@ -3972,9 +4071,68 @@ function VoicePanel() {
           <span>{asideNote}</span>
         </div>
       )}
+      <div style={{ margin: '0 0 var(--gap)' }}>
+        <p className="k" style={{ margin: '0 0 6px' }}>Recording sets</p>
+        <p className="fhint" style={{ margin: '0 0 8px' }}>
+          One set per microphone or setup, so they can be compared by the numbers. A quick
+          microphone test is 15 sentences, about two minutes.
+        </p>
+        {sets.length > 0 && (
+          <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 8 }}>
+            <thead>
+              <tr className="fhint" style={{ textAlign: 'left' }}>
+                <th style={{ padding: '4px 8px 4px 0' }}>Set</th>
+                <th style={{ padding: 4 }}>Microphone</th>
+                <th style={{ padding: 4 }}>Read</th>
+                <th style={{ padding: 4 }} title="How far your voice is above the background noise. 30 dB or more is good.">Voice above noise</th>
+                <th style={{ padding: 4 }}>Automatic volume</th>
+                <th style={{ padding: 4 }}>Best: words wrong</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sets.map(x => (
+                <tr
+                  key={x.id}
+                  onClick={() => setSetId(x.id)}
+                  style={{ cursor: 'pointer', borderTop: '1px solid rgba(255,255,255,0.06)', background: x.id === setId ? 'rgba(184,145,74,0.12)' : undefined }}
+                  aria-selected={x.id === setId}
+                >
+                  <td style={{ padding: '6px 8px 6px 0' }}>{x.id === setId ? '▸ ' : ''}{x.name}</td>
+                  <td style={{ padding: 4 }} className="fhint">{x.mic || '—'}</td>
+                  <td style={{ padding: 4 }}>{x.clips}{x.limit ? ` / ${x.limit}` : ''}</td>
+                  <td style={{ padding: 4, color: x.gapDb === null ? undefined : x.gapDb >= 30 ? '#9ec49a' : x.gapDb >= 20 ? '#e0c09e' : '#e0a09e' }}>
+                    {x.gapDb === null ? '—' : `${x.gapDb} dB`}
+                  </td>
+                  <td style={{ padding: 4 }}>{x.applied?.autoGainControl === undefined ? '—' : x.applied.autoGainControl ? 'on' : 'off'}</td>
+                  <td style={{ padding: 4 }}>{x.best ? `${Math.round(x.best.wer * 100)}% · ${x.best.label.split(' · ').pop()}` : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <div className="flex gap-2 flex-wrap items-center">
+          <span className="inwrap cut-sm" style={{ flex: '1 1 220px' }}>
+            <input
+              className="input"
+              value={newName}
+              placeholder="New set's name, e.g. Uber Mic cardioid"
+              onChange={e => setNewName(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && void newSet()}
+            />
+          </span>
+          <label className="flex items-center gap-2 fhint" style={{ margin: 0, cursor: 'pointer' }}>
+            <input type="checkbox" checked={quick} onChange={e => setQuick(e.target.checked)} />
+            Quick mic test (15)
+          </label>
+          <button className="btn btn-sm cut-sm" onClick={() => void newSet()}>
+            New set
+          </button>
+        </div>
+      </div>
+
       <div className="flex gap-6 flex-wrap" style={{ margin: '4px 0 var(--gap)' }}>
         <span className="fhint" style={{ margin: 0 }}>
-          <b>{read}</b> of {script.length} sentences read · about <b>{minutes}</b> min of your voice
+          <b>{current?.name || 'Set 1'}</b>: <b>{read}</b> of {readable.length} sentences read · about <b>{minutes}</b> min of your voice
         </span>
       </div>
 
@@ -4053,7 +4211,8 @@ function VoicePanel() {
 
       {reading && (
         <ReadingSession
-          script={script}
+          setId={setId}
+          script={readable}
           done={done}
           onSaved={n => setDone(d => new Set(d).add(n))}
           onClose={() => {
