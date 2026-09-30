@@ -31,3 +31,8 @@ release/
 
 # Docs site build output.
 docs/.astro/
+
+# Voice training: your recordings and the trained model stay local.
+training/data/
+training/out/
+training/.venv/

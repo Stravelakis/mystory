@@ -6,6 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 ## [Unreleased]
 
 ### Added
+- `training/`: fine-tunes Whisper large-v3-turbo on your Your voice clips (LoRA, fits an 8 GB card). It measures before and after on held-back sentences, and serves the result as a local transcription endpoint on port 40666.
 - **Start a session** (Vault): a quiet full-screen view for talking without the rest of the app. It has one button to begin, **Pause** (still one recording, and pauses aren't timed or transcribed), **I'm done**, and the option to hide the words. The space bar pauses and carries on.
 - The screen stays awake while recording, so a phone doesn't lock mid-sentence and cut the microphone.
 - **Your voice** (Settings): a reading session that teaches the app how you sound. It prepares calm, everyday sentences with your own names and places in them, and you read them one at a time on a full-screen view (the space bar starts and finishes each one). Each clip is saved with its text in `vault/voice/`. **Measure** then runs your clips through every engine you have and ranks them by how many words each got wrong, and **Use the best three** sets them in that order.

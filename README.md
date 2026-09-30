@@ -226,6 +226,40 @@ not a bug.
 
 ---
 
+## Getting it to understand you
+
+Speech recognition that gets your words wrong is worse than none. In order
+of effort:
+
+1. **Say which language you speak.** Vault → Session → Spoken language:
+   Greek or English. There's no auto-detect, because guessing wrong ruins a
+   whole transcript.
+2. **Use a decent microphone, untouched.** Pick it under **Microphone**. For
+   a USB or studio mic, set **Sound cleanup: Off** so the browser's
+   phone-call filters don't squash quiet speech. The level bar shows it's
+   hearing you.
+3. **Teach it your words.** Settings → **My words**: names, what you call
+   people at home, places, family words. **Help me build my list** walks you
+   through it, and **Find words in my entries** suggests the ones already in
+   your writing.
+4. **Measure it on your voice.** Settings → **Your voice**: read calm,
+   everyday sentences aloud, one at a time. **Measure** ranks every engine by
+   how many of your words it gets wrong; **Use the best three** sets them.
+5. **Train it on your voice.** With half an hour or more of reading,
+   [`training/`](training/README.md) fine-tunes Whisper on your recordings
+   and tells you honestly whether it helped.
+
+Old recordings are never lost: **Transcribe again** runs any entry's
+recording through today's settings.
+
+### Talking without thinking about the tech
+
+**Start a session** (Vault) gives you one button and a quiet screen. Pause
+whenever you need to; it's still one recording, and the pause isn't
+transcribed. Words appear as you speak (or hide them). The recording is sent
+to your vault in pieces as you talk, so a crash costs seconds. If something
+does go wrong, the next time you open the app it offers **Recover it**.
+
 ## Where your writing lives
 
 **This machine is the vault.** Entries are plain markdown with front matter in
