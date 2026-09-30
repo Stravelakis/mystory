@@ -389,6 +389,7 @@ in.
 | `npm test` | the test suite, no network needed |
 | `npm run desktop` | build, then open the Electron window (`desktop:browser` opens your browser instead) |
 | `npm run build-exe` | the Windows installer and portable `.exe`, into `release/` |
+| `scripts/make-app-shortcut.ps1 -Url https://…:38726` | a Desktop shortcut that opens a My Story running elsewhere (e.g. over Tailscale) in its own app window |
 | `npm run gemini:doctor` | list the Gemini models your key can actually reach |
 
 `npm test` runs the test suite (vitest, `tests/`): the vault round trip,

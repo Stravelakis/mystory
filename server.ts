@@ -97,7 +97,7 @@ import { draftEpisode, proposeEpisodes, render as renderForEpisode } from './epi
 import { repair, checkUpdate } from './maintenance.ts';
 import { loadWords, saveWords, wordsHint, keepIfPresent } from './words.ts';
 import { openLiveTranscription } from './live.ts';
-import { loadScript, loadClips, appendScript, cleanScript, saveClip, readClip, wordErrorRate, sampleClips } from './voice.ts';
+import { loadScript, loadClips, appendScript, cleanScript, saveClip, readClip, wordErrorRate, sampleClips, peakDb, SILENT_DB, setAsideSilentClips } from './voice.ts';
 import { planParts, openChapter, readChapter, savePart, listChapters, isChapterId } from './chapters.ts';
 import { timelineKey } from './vault.ts';
 
@@ -395,6 +395,20 @@ async function startServer() {
         console.error('Vault write failed before transcription:', err);
         return reply(500, { success: false, error: 'Could not write to the vault: ' + err.message });
       }
+
+      // Silence in, nonsense out: Whisper answers a silent file with
+      // "Υπότιτλοι AUTHORWAVE" and similar. Say what actually happened.
+      try {
+        if ((await peakDb(buffer)) < SILENT_DB) {
+          return reply(200, {
+            success: false,
+            silent: true,
+            entryId: id,
+            audioKept: Boolean(audio),
+            error: 'The recording is silent: the microphone was not hearing you. Check the Microphone choice in the Session panel (its level bar should move when you speak).',
+          });
+        }
+      } catch {}
 
       try {
         const config = await loadConfig();
@@ -843,6 +857,16 @@ ${corpus}
 
   /* --- Your voice (voice.ts) ------------------------------------------------ */
 
+  /** Measures clips not yet measured; silent ones are set aside so their
+   *  sentences can be read again. */
+  app.post('/api/voice/check', async (_req, res) => {
+    try {
+      res.json({ success: true, ...(await setAsideSilentClips()) });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message || String(e) });
+    }
+  });
+
   app.get('/api/voice', async (_req, res) => {
     const [script, clips] = await Promise.all([loadScript(), loadClips()]);
     const seconds = clips.reduce((s, c) => s + c.bytes, 0) / 8000; // 64 kbps
@@ -891,7 +915,20 @@ Return ONLY JSON: {"sentences":["...", "..."]}`,
     const n = Number(req.params.n);
     if (!req.file || !Number.isInteger(n) || n < 1) return res.status(400).json({ success: false, error: 'No clip.' });
     try {
-      const clip = await saveClip(n, req.file.buffer, req.file.mimetype || 'audio/webm');
+      // A clip with no voice in it is refused, so a dead microphone is
+      // noticed on the first sentence rather than after a hundred.
+      let peak: number | undefined;
+      try {
+        peak = await peakDb(req.file.buffer);
+      } catch {}
+      if (peak !== undefined && peak < SILENT_DB) {
+        return res.status(422).json({
+          success: false,
+          silent: true,
+          error: 'That recording is silent: the microphone is not hearing you. Check the Microphone choice and its level bar, then read it again.',
+        });
+      }
+      const clip = await saveClip(n, req.file.buffer, req.file.mimetype || 'audio/webm', peak);
       res.json({ success: true, clip: { n: clip.n, bytes: clip.bytes } });
     } catch (e: any) {
       res.status(400).json({ success: false, error: e.message || String(e) });
@@ -914,7 +951,15 @@ Return ONLY JSON: {"sentences":["...", "..."]}`,
   app.post('/api/voice/measure', async (req, res) => {
     if (measure?.running) return res.json({ success: true, measure });
     const config = await loadConfig();
+    // Never score engines on silence again.
+    const aside = await setAsideSilentClips().catch(() => ({ silent: [] as number[] }));
     const clips = sampleClips(await loadClips(), Math.max(5, Math.min(40, Number(req.body?.sample) || 15)));
+    if (aside.silent.length && clips.length < 5) {
+      return res.status(400).json({
+        success: false,
+        error: `${aside.silent.length} of your recordings were silent (the microphone was not hearing you), so they were set aside to read again.`,
+      });
+    }
     if (clips.length < 5) return res.status(400).json({ success: false, error: 'Read at least 5 sentences first.' });
     const engines = transcriptionCandidates(config);
     if (engines.length === 0) return res.status(400).json({ success: false, error: 'No transcription engine is set up.' });

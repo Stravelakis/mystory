@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 
 ## [Unreleased]
 
+### Fixed
+- **A dead microphone went unnoticed.** On 30 Sep 2026, 100 reading clips were recorded from a microphone that wasn't hearing anything, and every engine was then scored on silence. Now:
+  - silent reading clips are refused on the spot,
+  - a recording warns within 8 seconds if nothing at all is arriving,
+  - silent recordings aren't transcribed into nonsense (Whisper calls silence "Υπότιτλοι AUTHORWAVE"),
+  - silent clips already saved are moved to `.trash`, so their sentences can be read again.
+- The microphone list showed "Microphone 1, 2…" until you'd recorded once. **Show microphone names** asks for access straight away.
+- Measure no longer tries OmniRoute's `auto`, which can't transcribe.
+
+### Added
+- **Test microphone** in the Session panel: five seconds, then a verdict. It hears you, it hears only the room, or nothing is arriving.
+- The reading screen shows the level bar before you start.
+- `scripts/make-app-shortcut.ps1`: a Desktop shortcut that opens a remote My Story (for example over Tailscale) in its own app window.
+
+### Changed
+- In the Vault, **Indicators** now sits beside the transcription window, so both are on one screen. Saved layouts get this move once; after that, Arrange panels decides.
+- **Start a session** shares a row with Arrange panels.
+
 ## [1.2.0] - 2026-09-30
 
 Focused on one thing: the app understanding the person speaking.
