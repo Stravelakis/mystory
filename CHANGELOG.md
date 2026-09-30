@@ -6,6 +6,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 ## [Unreleased]
 
 ### Added
+- **New set** now asks which microphone to use (with **Find microphones**), and names the set after it unless you type a name. The reading screen records from that set's microphone.
+- Tick sets in the comparison table and press **Measure the ticked sets**: they're measured one after another, and the table fills in as each finishes.
+- The Vault's Session panel always shows **Find microphones**.
 - **Recording sets** in Your voice: one set per microphone or setup, each with its own reading, and a **Quick mic test** option (15 sentences). A comparison table shows each set's microphone, how far the voice sits above the background, whether the browser's automatic volume was actually on, and the best engine's word error rate.
 - Each set records what the microphone really did (from the browser's own report). If automatic volume stayed on after being turned off, the reading screen says so.
 - Recordings are cleaned before transcription: rumble cut and loudness evened out (setting `AUDIO_CLEANUP`, default `level`). Measured on real clips, this took Gemini Live from 52% to 41% words wrong. Strong noise reduction made things worse, so it isn't offered. The original recording is never changed.

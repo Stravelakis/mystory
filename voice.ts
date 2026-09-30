@@ -67,6 +67,8 @@ export interface RecordingSet {
   limit?: number;
   /** The microphone's name as the browser reported it. */
   mic?: string;
+  /** The browser's id for the microphone chosen for this set. */
+  micId?: string;
   /** What the browser actually applied, from MediaStreamTrack.getSettings(). */
   applied?: { autoGainControl?: boolean; noiseSuppression?: boolean; echoCancellation?: boolean; sampleRate?: number; channelCount?: number };
   /** What was asked for (Sound cleanup on or off). */
@@ -151,6 +153,7 @@ export async function createSet(input: Partial<RecordingSet>): Promise<Recording
     created: new Date().toISOString(),
     ...(input.limit ? { limit: Math.max(5, Math.min(500, Number(input.limit))) } : {}),
     ...(input.mic ? { mic: String(input.mic).slice(0, 120) } : {}),
+    ...(input.micId ? { micId: String(input.micId).slice(0, 200) } : {}),
     ...(input.cleanup ? { cleanup: String(input.cleanup).slice(0, 10) } : {}),
   };
   await writeJson(SETS_FILE, [...sets, set]);
