@@ -386,3 +386,80 @@ export async function findAudio(id: string): Promise<string | null> {
   const hit = names.find(n => n.startsWith(`${id}.`));
   return hit ? path.join(AUDIO_DIR, hit) : null;
 }
+
+/* -----------------------------------------------------------------------------
+   Recordings in progress. While someone is speaking, the browser sends the
+   recording in pieces every few seconds and they are appended here, so a
+   crash, a closed tab or a dead battery costs seconds, not the session. When
+   the finished recording arrives the pieces are dropped; if it never arrives
+   they are offered back as an interrupted recording.
+   -------------------------------------------------------------------------- */
+
+const PARTIAL_DIR = path.join(AUDIO_DIR, 'partial');
+const SID_RE = /^[a-z0-9]{8,40}$/;
+
+export interface PartialInfo {
+  sid: string;
+  mime: string;
+  bytes: number;
+  started: string;
+  updated: string;
+}
+
+export function isValidSid(sid: unknown): sid is string {
+  return typeof sid === 'string' && SID_RE.test(sid);
+}
+
+async function readPartialMeta(sid: string): Promise<PartialInfo | null> {
+  try {
+    return JSON.parse(await fs.readFile(path.join(PARTIAL_DIR, `${sid}.json`), 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+/** Appends piece `seq` (0-based). Pieces must arrive in order; a repeat of the
+ *  last piece is ignored (a retried request), anything else is refused. */
+export async function appendPartial(sid: string, seq: number, piece: Buffer, mime: string): Promise<PartialInfo> {
+  if (!isValidSid(sid)) throw new Error('Not a recording id.');
+  await fs.mkdir(PARTIAL_DIR, { recursive: true, mode: 0o700 });
+  const now = new Date().toISOString();
+  const meta = (await readPartialMeta(sid)) || { sid, mime: mime || 'audio/webm', bytes: 0, started: now, updated: now, next: 0 };
+  const next = (meta as any).next ?? 0;
+  if (seq === next - 1) return meta; // a retry of the piece already stored
+  if (seq !== next) throw Object.assign(new Error(`Expected piece ${next}, got ${seq}.`), { expected: next });
+  await fs.appendFile(path.join(PARTIAL_DIR, `${sid}.audio`), piece, { mode: 0o600 });
+  const updated = { ...meta, bytes: meta.bytes + piece.length, updated: now, next: next + 1 };
+  await fs.writeFile(path.join(PARTIAL_DIR, `${sid}.json`), JSON.stringify(updated), { mode: 0o600 });
+  return updated;
+}
+
+/** Recordings whose pieces stopped arriving a while ago and were never finished. */
+export async function listPartials(quietMs = 90_000): Promise<PartialInfo[]> {
+  const names = await fs.readdir(PARTIAL_DIR).catch(() => [] as string[]);
+  const out: PartialInfo[] = [];
+  for (const n of names) {
+    if (!n.endsWith('.json')) continue;
+    const meta = await readPartialMeta(n.slice(0, -5));
+    if (meta && meta.bytes > 0 && Date.now() - Date.parse(meta.updated) > quietMs) out.push(meta);
+  }
+  return out.sort((a, b) => a.started.localeCompare(b.started));
+}
+
+export async function readPartial(sid: string): Promise<{ buffer: Buffer; mime: string } | null> {
+  if (!isValidSid(sid)) return null;
+  const meta = await readPartialMeta(sid);
+  if (!meta) return null;
+  return { buffer: await fs.readFile(path.join(PARTIAL_DIR, `${sid}.audio`)), mime: meta.mime };
+}
+
+/** Removes the pieces once the whole recording is safely in the vault. With
+ *  `savedBytes`, only if what was saved is at least as long as the pieces. */
+export async function dropPartial(sid: string, savedBytes?: number): Promise<void> {
+  if (!isValidSid(sid)) return;
+  const meta = await readPartialMeta(sid);
+  if (!meta) return;
+  if (savedBytes !== undefined && savedBytes < meta.bytes) return;
+  await fs.rm(path.join(PARTIAL_DIR, `${sid}.audio`), { force: true });
+  await fs.rm(path.join(PARTIAL_DIR, `${sid}.json`), { force: true });
+}

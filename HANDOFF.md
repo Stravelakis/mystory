@@ -291,3 +291,19 @@ like the ordinary API, and every quirk below cost a failed test to find
   fails it moves on to the next model instead of becoming "nothing found".
 
 Fallbacks: `gemini-3.5-flash-lite`, then `gemma-4-31b-it`.
+
+**Transcription and pauses (30 Sep 2026).** `gemini-3.5-transcribe-live`
+sends `turnComplete` at every pause it hears. Until then `liveTranscribe`
+treated the first one as the end, so everything after the first pause was
+lost; that was the "it does not understand me" report. Never settle on
+`turnComplete`: wait for all the audio to be sent, then for 5 s of nothing new.
+Always pass `languageHints` (el-GR / en-US), since misheard words dropped
+with it in the same test.
+
+**Words while speaking** (`openLiveTranscription`, `/ws/live`). The browser
+streams 16 kHz PCM16 from an AudioWorklet. Text arrives a sentence at a time,
+2–3 s after the sentence ends. **Google ends a session at about 9 minutes**
+(seen at 540 s); the stream reopens on `goAway` or close and holds up to a
+minute of audio meanwhile. The recording is separate (5 s pieces to
+`vault/audio/partial/`, then the full upload), so live words are never the
+only copy of anything.

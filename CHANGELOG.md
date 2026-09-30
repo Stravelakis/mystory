@@ -6,16 +6,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 ## [Unreleased]
 
 ### Added
+- **Your voice** (Settings): a reading session that teaches the app how you sound. It prepares calm, everyday sentences with your own names and places in them, and you read them one at a time on a full-screen view (the space bar starts and finishes each one). Each clip is saved with its text in `vault/voice/`. **Measure** then runs your clips through every engine you have and ranks them by how many words each got wrong, and **Use the best three** sets them in that order.
+- **Words while you speak** (Session → Words while I speak, on by default). The microphone streams to Gemini Live and each sentence appears a few seconds after you say it. Google ends a Live session after about 9 minutes; it reconnects on its own in a fraction of a second, holding the audio meanwhile. When you stop, the full recording still gets the careful pass. If that pass fails, the live words are kept.
+- **The recording is saved while you speak**, in 5-second pieces. A crash, a closed tab or a flat battery costs seconds, not the session. Next time, the vault offers **Recover it**.
 - **My words** (Settings): names, places and family words the transcriber can't know, saved as `vault/words.md`. The list is given to every transcription, and the tidying pass may correct a misheard word to one on the list. To help build it: four guided prompts, one-tap therapy terms, and **Find words in my entries**, which only suggests words that really appear in your entries.
 - **Transcribe again** on any entry with a recording: it runs through today's transcriber with your word list. The previous text is copied to `.trash` first.
 - **Microphone** and **Sound cleanup** settings in the Session panel, plus a live level meter. With cleanup Off, a good USB microphone reaches the transcriber untouched, without the browser's phone-call filters.
 - The vault page's panels can be rearranged. **Arrange panels** lets you drag a panel by its grip (touch works too), move it with the arrows, or send it to the other column. **Reset layout** undoes it all. The layout is remembered in each browser, so your phone and desktop can differ.
 
 ### Fixed
+- Whisper engines transcribed Greek speech as English. The hint sent with each recording was an English sentence, and Whisper follows the hint's language. It's now only the word list. The voice measurement caught this.
+- **Long recordings were lost.** Uploads were capped at 10 MB, about 10–20 minutes of speech. A longer session was refused and never reached the vault. Recordings are now made at 64 kbps (about 0.5 MB a minute), and the cap is 400 MB.
 - **Live transcription stopped at the first pause.** Everything said after the first pause in a recording was thrown away. Now it listens to the end, however long the pauses are. It is also told the language, which it wasn't before.
 - Transcript sentences no longer run together ("word.Word").
 
 ### Changed
+- The browser's own speech recognition is gone. It didn't work in the desktop app, and in Chrome it sent your voice to Google without asking. Words while you speak replaces it and respects the consent setting.
 - Spoken language is Greek or English, with no Auto-detect. Greek is the default, and the choice is remembered.
 
 ## [1.1.0] - 2026-09-25
