@@ -178,30 +178,61 @@ async function streamAudio(session: any, pcm: Buffer) {
   session.sendRealtimeInput({ audioStreamEnd: true });
 }
 
+/** BCP-47 codes for the languages the app records in. */
+const LIVE_LANGUAGE: Record<string, string> = { el: 'el-GR', en: 'en-US' };
+
 /** Speech → text, word for word. The answer is the model's record of what it
- *  heard, not a reply, and the session ending with 1008 is the normal finish. */
-export async function liveTranscribe(apiKey: string, model: string, audio: Buffer): Promise<string> {
+ *  heard, not a reply, and the session ending with 1008 is the normal finish.
+ *
+ *  Pauses: the model ends a "turn" at every pause it hears. Until 30 Sep 2026
+ *  the first turnComplete was taken as the end of the recording, so everything
+ *  said after the first pause was thrown away — for someone who pauses to
+ *  gather themselves, most of every entry. Now the session runs until all the
+ *  audio has been sent AND nothing new has been heard for a few seconds. */
+export async function liveTranscribe(
+  apiKey: string,
+  model: string,
+  audio: Buffer,
+  opts: { language?: string } = {},
+): Promise<string> {
   const pcm = await toPcm16k(audio);
   const ai = new GoogleGenAI({ apiKey });
   let heard = '';
   let session: any;
   let idle: NodeJS.Timeout | undefined;
+  let sentAll = false;
+  let paused = false;
+  const code = LIVE_LANGUAGE[opts.language || ''];
 
   const result = new Promise<string>((resolve, reject) => {
     const settle = () => resolve(heard);
+    // Only once every chunk is in may quiet mean "finished".
+    const bump = () => {
+      clearTimeout(idle);
+      if (sentAll) idle = setTimeout(settle, 5000);
+    };
     ai.live
       .connect({
         model,
-        config: { responseModalities: [Modality.TEXT], inputAudioTranscription: {} },
+        config: {
+          responseModalities: [Modality.TEXT],
+          inputAudioTranscription: code ? ({ languageHints: { languageCodes: [code] } } as any) : {},
+          // Long silences are part of how this person speaks; do not treat a
+          // few seconds of quiet as the end of what they were saying.
+          realtimeInputConfig: { automaticActivityDetection: { silenceDurationMs: 2000 } },
+        },
         callbacks: {
           onmessage: (msg: any) => {
             const t = msg.serverContent?.inputTranscription?.text;
             if (t) {
+              // A pause the model heard as the end of a turn becomes a new
+              // paragraph, instead of two sentences glued together.
+              if (paused && heard) heard = heard.trimEnd() + '\n\n';
+              paused = false;
               heard += t;
-              clearTimeout(idle);
-              idle = setTimeout(settle, 4000);
+              bump();
             }
-            if (msg.serverContent?.turnComplete) settle();
+            if (msg.serverContent?.turnComplete) paused = true;
           },
           onerror: (e: any) => (heard ? settle() : reject(new LiveError(e?.message || String(e)))),
           onclose: (e: any) => {
@@ -215,14 +246,22 @@ export async function liveTranscribe(apiKey: string, model: string, audio: Buffe
       .then(async s => {
         session = s;
         await streamAudio(s, pcm);
+        sentAll = true;
+        bump();
       })
       .catch(err => reject(new LiveError(err?.message || String(err))));
   });
 
+  // Audio goes in at about 6.7x real time (100 ms every 15 ms), so a long
+  // recording needs longer than the fixed session timeout.
+  const seconds = pcm.length / 32000;
+  const budget = Math.max(SESSION_TIMEOUT_MS, (seconds / 6) * 1000 + 60_000);
   try {
-    const out = await withTimeout(result, SESSION_TIMEOUT_MS, 'Live transcription did not finish.');
+    const out = await withTimeout(result, budget, 'Live transcription did not finish.');
     if (!out.trim()) throw new LiveError('Live transcription heard nothing in the recording.');
-    return out.trim();
+    // Segments arrive without a space between them ("Θεσσαλονίκη.Διάβασε").
+    // Greek uses ";" as its question mark, so it counts as an ending too.
+    return out.trim().replace(/([.!?;…])(?=[\p{Lu}\p{Ll}])/gu, '$1 ');
   } finally {
     clearTimeout(idle);
     try {

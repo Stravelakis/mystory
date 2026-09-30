@@ -942,7 +942,7 @@ export async function transcribe(
     try {
       const text =
         p.kind === 'gemini-live'
-          ? await liveTranscribe(p.apiKey, model, buffer)
+          ? await liveTranscribe(p.apiKey, model, buffer, { language })
           : p.kind === 'gemini'
             ? await geminiTranscribe(p, model, buffer, mimetype, spoken)
             : await openaiTranscribe(p, model, buffer, mimetype, language, spoken);
