@@ -760,6 +760,7 @@ const LANGUAGES: PickerGroup[] = [
     options: [
       { value: 'el', label: 'Greek' },
       { value: 'en', label: 'English' },
+      { value: 'mix', label: 'Greek + English (mixed)' },
     ],
   },
 ];
@@ -1237,12 +1238,13 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   };
   const [transcript, setTranscript] = useState('');
   const [sessionName, setSessionName] = useState('');
-  // Greek or English, never "detect": guessing the language wrong is the
-  // single easiest way to get a transcript that is nonsense throughout.
+  // Greek, English, or "mix" — never open-ended detection: guessing the
+  // language wrong is the single easiest way to get a transcript that is
+  // nonsense throughout. "mix" lets the engine choose between the two only.
   const [language, setLanguage] = useState<string>(() => {
     try {
       const saved = localStorage.getItem('mystory.language');
-      return saved === 'en' ? 'en' : 'el';
+      return saved === 'en' || saved === 'mix' ? saved : 'el';
     } catch {
       return 'el';
     }
@@ -1333,7 +1335,7 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
     setLiveNote('');
     setLiveState('reconnecting');
     const ws = new WebSocket(
-      `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/live?lang=${language === 'en' ? 'en' : 'el'}`,
+      `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/live?lang=${language === 'en' || language === 'mix' ? language : 'el'}`,
     );
     ws.binaryType = 'arraybuffer';
     const queue: ArrayBuffer[] = [];
@@ -4659,12 +4661,22 @@ function SettingsCenter({
           </div>
 
           <div>
-            <p className="k" style={{ marginBottom: 6 }}>Local transcription</p>
+            <p className="k" style={{ marginBottom: 6 }}>Speech engine on the laptop</p>
+            <Field
+              label="Endpoint"
+              value={config.LOCAL_STT_GPU_BASE_URL || ''}
+              onChange={v => handleChange('LOCAL_STT_GPU_BASE_URL', v)}
+              placeholder="http://laptop.your-tailnet.ts.net:40666/v1"
+            />
+            <p className="fhint">
+              Tried first. When the laptop is off or its engine is paused, the one below takes over within seconds.
+            </p>
+            <p className="k" style={{ marginBottom: 6, marginTop: 12 }}>Local transcription (mini PC)</p>
             <Field
               label="Endpoint"
               value={config.LOCAL_STT_BASE_URL || ''}
               onChange={v => handleChange('LOCAL_STT_BASE_URL', v)}
-              placeholder="http://localhost:8000/v1"
+              placeholder="http://127.0.0.1:40667/v1"
             />
             <Field
               label="Model"

@@ -1,0 +1,12 @@
+# The speech engine. Kept apart from training/requirements.txt, which is much
+# heavier (PyTorch) and only needed on the day you train.
+faster-whisper>=1.1
+fastapi>=0.115
+uvicorn>=0.32
+python-multipart>=0.0.12
+# Taskbar icon (laptop only; harmless elsewhere)
+pystray>=0.19
+Pillow>=10
+# CUDA libraries as packages, so nothing is installed system-wide (Windows/Linux)
+nvidia-cublas-cu12; platform_machine == "AMD64" or platform_machine == "x86_64"
+nvidia-cudnn-cu12>=9,<10; platform_machine == "AMD64" or platform_machine == "x86_64"

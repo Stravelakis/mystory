@@ -89,6 +89,8 @@ import {
   listModels,
   TASKS,
   type Task,
+  LOCAL_SPEECH_ENGINES,
+  engineNotReady,
 } from './providers.ts';
 import { buildPrompt, normalise, loadTerms, CATEGORIES } from './vocabulary.ts';
 import { translate } from './translate.ts';
@@ -97,9 +99,16 @@ import { draftEpisode, proposeEpisodes, render as renderForEpisode } from './epi
 import { repair, checkUpdate } from './maintenance.ts';
 import { loadWords, saveWords, wordsHint, keepIfPresent } from './words.ts';
 import { openLiveTranscription } from './live.ts';
+import { openLocalLiveTranscription } from './livelocal.ts';
 import { loadScript, loadClips, appendScript, cleanScript, saveClip, readClip, wordErrorRate, sampleClips, peakDb, SILENT_DB, setAsideSilentClips, loadSets, createSet, updateSet, isSetId, loadMeasures, saveMeasure } from './voice.ts';
 import { planParts, openChapter, readChapter, savePart, listChapters, isChapterId } from './chapters.ts';
 import { timelineKey } from './vault.ts';
+
+/** The spoken-language choice as transcription takes it: 'el', 'en', or ''
+ *  for "mix" (the engine picks Greek or English per piece). */
+function spokenLanguage(v: unknown): string {
+  return v === 'en' ? 'en' : v === 'mix' ? '' : 'el';
+}
 
 // From the same file the settings screen writes to. Plain dotenv.config() read
 // ./.env in the working folder, so when the desktop app or a server install
@@ -215,10 +224,67 @@ async function startServer() {
     const say = (m: object) => {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(m));
     };
+    // The microphone starts streaming at once, while the engine is still being
+    // chosen below. Hold those first seconds instead of dropping them.
+    const early: [any, boolean][] = [];
+    let onMessage = (data: any, isBinary: boolean) => void early.push([data, isBinary]);
+    ws.on('message', (data, isBinary) => onMessage(data, isBinary));
+    const handle = (fn: (data: any, isBinary: boolean) => void) => {
+      onMessage = fn;
+      for (const [d, b] of early.splice(0)) fn(d, b);
+    };
     const url = new URL(request.url || '/', 'http://x');
-    const language = url.searchParams.get('lang') === 'en' ? 'en' : 'el';
+    const lang = url.searchParams.get('lang');
+    // "mix": Greek and English in one session; the engine decides per piece.
+    const language = lang === 'en' ? 'en' : lang === 'mix' ? '' : 'el';
 
     const config = await loadConfig();
+
+    // Your own speech engine first: free, private, and it has heard you.
+    const engines = resolveProviders(config).filter(p => LOCAL_SPEECH_ENGINES.includes(p.id));
+    const readiness = await Promise.all(engines.map(p => engineNotReady(p)));
+    if (engines.length && readiness.some(r => !r)) {
+      const hint = wordsHint(await loadWords());
+      const local = openLocalLiveTranscription({
+        transcribePiece: async wav => {
+          const failures: string[] = [];
+          for (const p of engines) {
+            try {
+              return (
+                await transcribe(config, wav, 'audio/wav', {
+                  only: { providerId: p.id, model: p.stt[0] },
+                  language,
+                  words: hint,
+                  cleanup: 'none',
+                })
+              ).text;
+            } catch (e: any) {
+              failures.push(e?.message || String(e));
+            }
+          }
+          throw new Error(failures[0] || 'No speech engine answered.');
+        },
+        onText: text => say({ type: 'text', text }),
+        onState: (state, detail) => {
+          if (state !== 'open') console.warn(`[live words] local engine ${state}: ${detail}`);
+          say({ type: 'state', state });
+        },
+      });
+      console.info(`[live words] local engine (${language || 'el+en'})`);
+      handle(async (data, isBinary) => {
+        if (isBinary) return local.send(Buffer.from(data as Buffer));
+        try {
+          if (JSON.parse(data.toString()).type === 'stop') {
+            await local.finish();
+            say({ type: 'done' });
+            ws.close();
+          }
+        } catch {}
+      });
+      ws.on('close', () => local.close());
+      return;
+    }
+
     if (isLocalOnly(config) || !hasCloudConsent(config)) {
       say({ type: 'unavailable', message: 'Words while you speak use Gemini Live, a cloud service. Tick "I understand where my words go" in Settings to use them.' });
       return ws.close();
@@ -244,7 +310,7 @@ async function startServer() {
     });
     console.info(`[live words] ${provider.id}/${model} (${language})`);
 
-    ws.on('message', async (data, isBinary) => {
+    handle(async (data, isBinary) => {
       if (isBinary) return stream.send(Buffer.from(data as Buffer));
       try {
         if (JSON.parse(data.toString()).type === 'stop') {
@@ -415,7 +481,7 @@ async function startServer() {
         const words = await loadWords();
         const result = await transcribe(config, buffer, mime, {
           engine: body?.engine,
-          language: body?.language === 'en' ? 'en' : 'el',
+          language: spokenLanguage(body?.language),
           words: wordsHint(words),
         });
 
@@ -823,7 +889,7 @@ ${corpus}
 
       const config = await loadConfig();
       const words = await loadWords();
-      const language = req.body?.language === 'en' ? 'en' : 'el';
+      const language = spokenLanguage(req.body?.language);
       const result = await transcribe(config, buffer, mime, { engine: req.body?.engine, language, words: wordsHint(words) });
 
       let text = result.text;

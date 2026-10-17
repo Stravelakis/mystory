@@ -186,6 +186,23 @@ export function resolveProviders(config: Record<string, string>): Provider[] {
     });
   }
 
+  // The laptop's speech engine first: it has the graphics card. When it is
+  // off, asleep or paused, /health says so and the mini PC's copy takes over.
+  const gpuStt = normaliseBase(config.LOCAL_STT_GPU_BASE_URL);
+  if (gpuStt) {
+    list.push({
+      id: 'local-stt-gpu',
+      label: 'Speech engine (laptop)',
+      kind: 'openai',
+      local: true,
+      baseUrl: gpuStt,
+      apiKey: (config.LOCAL_STT_GPU_API_KEY || '').trim() || 'local',
+      chat: {},
+      stt: ['my-voice'],
+      canList: true,
+    });
+  }
+
   const localStt = normaliseBase(config.LOCAL_STT_BASE_URL);
   if (localStt) {
     list.push({
@@ -500,6 +517,7 @@ export function explain(status: number, body: string, provider: string): string 
    -------------------------------------------------------------------------- */
 
 const TIMEOUT_MS = Number(process.env.PROVIDER_TIMEOUT_MS || 120_000);
+const LOCAL_STT_TIMEOUT_MS = Number(process.env.LOCAL_STT_TIMEOUT_MS || 45 * 60_000);
 
 /** OpenRouter asks callers to identify themselves, and uses it for the public
  *  model-usage rankings. Sending a project name rather than a user's own
@@ -753,6 +771,25 @@ export async function chat(config: Record<string, string>, req: ChatRequest): Pr
    Transcription
    -------------------------------------------------------------------------- */
 
+/** Our own speech engines (engine/stt_engine.py), in the order to try them. */
+export const LOCAL_SPEECH_ENGINES = ['local-stt-gpu', 'local-stt'];
+
+/** Asks a local speech engine whether it can take work right now, in under
+ *  two seconds, so a laptop that is off or paused costs a moment rather than
+ *  a timeout. Engines without /health (other Whisper servers) are tried as
+ *  before. Returns why not, or '' when it may be tried. */
+export async function engineNotReady(p: Provider): Promise<string> {
+  if (!p.local || !p.baseUrl || !LOCAL_SPEECH_ENGINES.includes(p.id)) return '';
+  try {
+    const res = await fetch(`${p.baseUrl.replace(/\/v1$/, '')}/health`, { signal: AbortSignal.timeout(2000) });
+    if (res.status === 404) return '';
+    const h: any = await res.json();
+    return h?.state === 'ready' ? '' : `${p.label} is ${h?.state || 'not ready'}.`;
+  } catch {
+    return `${p.label} is not reachable (off or asleep).`;
+  }
+}
+
 export const LANGUAGE_NAMES: Record<string, string> = { el: 'Greek', en: 'English' };
 
 async function openaiTranscribe(
@@ -788,7 +825,9 @@ async function openaiTranscribe(
       method: 'POST',
       headers: authHeaders(p),
       body: form,
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      // A processor-only engine takes minutes over a long session; that is a
+      // slow answer, not a failed one.
+      signal: AbortSignal.timeout(p.local ? LOCAL_STT_TIMEOUT_MS : TIMEOUT_MS),
     });
 
     if (res.ok) {
@@ -967,12 +1006,20 @@ export async function transcribe(
   const byId = new Map(allowed.map(p => [p.id, p]));
 
   const attempts: { p: Provider; model: string }[] = [];
+  // Your own speech engines always go first (laptop, then mini PC): they are
+  // free, private, and the only ones measured to understand this voice.
+  for (const id of LOCAL_SPEECH_ENGINES) {
+    const p = byId.get(id);
+    if (p) attempts.push({ p, model: p.stt[0] });
+  }
   for (const slot of slotsFor(config, 'transcribe')) {
     const p = byId.get(slot.providerId);
-    if (p) attempts.push({ p, model: slot.model });
+    if (p && !attempts.some(a => a.p.id === p.id && a.model === slot.model)) attempts.push({ p, model: slot.model });
   }
-  if (attempts.length === 0) {
-    for (const p of allowed) for (const model of p.stt) attempts.push({ p, model });
+  if (attempts.length === LOCAL_SPEECH_ENGINES.filter(id => byId.has(id)).length) {
+    for (const p of allowed) for (const model of p.stt) {
+      if (!attempts.some(a => a.p.id === p.id && a.model === model)) attempts.push({ p, model });
+    }
   }
 
   // The Vault can pin one engine for the session rather than leaving it on Auto.
@@ -996,6 +1043,8 @@ export async function transcribe(
   const failures: string[] = [];
   for (const { p, model } of picked) {
     try {
+      const busy = await engineNotReady(p);
+      if (busy) throw new Error(busy);
       const text =
         p.kind === 'gemini-live'
           ? await liveTranscribe(p.apiKey, model, buffer, { language })
