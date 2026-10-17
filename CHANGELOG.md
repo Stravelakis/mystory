@@ -6,6 +6,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 ## [Unreleased]
 
 ### Added
+- **Your own speech engine** (`engine/`), tried before any cloud model: the laptop's graphics card first, the mini PC when the laptop is off, asleep or paused. Free and private. See `engine/README.md`.
+- Laptop: **Install speech engine** and **Train on my voice** are double-click files; **My Story speech** on the Desktop starts it with a taskbar icon to **Pause** (frees the graphics memory), Resume or Quit.
+- Spoken language **Greek + English (mixed)**: the engine picks one of the two for each stretch of speech.
+- Words while you speak can come from your own engine, cut at your pauses (1–5 s after each).
+- The session screen shows named patterns as they're found, about once a minute.
+- **Crash-proofing:** each 5-second piece is kept in the browser until the server has it, and is sent on the next visit if the tab closed. Transcriptions a restart interrupted run again by themselves. Words while you speak reconnect after a drop.
 - **New set** now asks which microphone to use (with **Find microphones**), and names the set after it unless you type a name. The reading screen records from that set's microphone.
 - Tick sets in the comparison table and press **Measure the ticked sets**: they're measured one after another, and the table fills in as each finishes.
 - The Vault's Session panel always shows **Find microphones**.
@@ -15,6 +21,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 - **Test microphone** now tells you what to fix: too quiet (input volume, which side of the mic, distance), too noisy (rumble, fans, pattern), or good, with the voice-above-background figure.
 
 ### Fixed
+- One recording piece lost to a short outage made the server refuse every piece after it, without saying so.
+- Words while you speak lost the first seconds of a session while the server was starting the transcriber.
 - **A dead microphone went unnoticed.** On 30 Sep 2026, 100 reading clips were recorded from a microphone that wasn't hearing anything, and every engine was then scored on silence. Now:
   - silent reading clips are refused on the spot,
   - a recording warns within 8 seconds if nothing at all is arriving,
