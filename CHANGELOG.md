@@ -6,6 +6,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 ## [Unreleased]
 
 ### Added
+- **Interviewer** (Vault panel and session view): questions as text on the screen. **Off** every time the page loads. *When I ask* answers only to **Ask me** and **Suggest topics**; *After a pause* also asks once after the quiet you set (15–120 s), never while words are arriving and never twice without new words. Tell it what you want to talk about, or press **Suggest topics** (drawn from the parts of your life you have said least about). Press **I** to switch it on or off.
+- The session's words and the interviewer's questions are saved as markdown in `vault/sessions/` every few seconds.
+- **Story** tab: a map of your life by period (what is covered, what is thin), a style guide learned from how you talk, and a chapter per period written in the first person from your entries only, each paragraph citing its entries. Chapters are marked when an entry changed since they were written.
+- **For Video-Forge**: downloads the script and the job file Video-Forge reads. Upload one of your own job files once for the cast and look. Video-Forge is not touched.
 - **Your own speech engine** (`engine/`), tried before any cloud model: the laptop's graphics card first, the mini PC when the laptop is off, asleep or paused. Free and private. See `engine/README.md`.
 - Laptop: **Install speech engine** and **Train on my voice** are double-click files; **My Story speech** on the Desktop starts it with a taskbar icon to **Pause** (frees the graphics memory), Resume or Quit.
 - Spoken language **Greek + English (mixed)**: the engine picks one of the two for each stretch of speech.

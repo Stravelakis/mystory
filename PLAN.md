@@ -7,9 +7,9 @@ Agreed with the owner 17 Oct 2026. Free only: no paid services.
 | 1 | Local speech engine (laptop graphics card → mini PC → Groq free → Gemini) | **done** | Opus, low |
 | 2 | Live session: words 1–5 s after each pause, tags fade in about once a minute | **done** | Opus, low |
 | 3 | Crash-proofing: pieces kept in the browser, job resume, live reconnect | **done** | Opus, low |
-| 4 | Interviewer | next | Sonnet, medium |
-| 5 | Ghostwriter | | Sonnet, medium |
-| 6 | Video-Forge export | | Sonnet, medium |
+| 4 | Interviewer | **done** | Sonnet, medium |
+| 5 | Ghostwriter (life map, style, book) | **done** | Sonnet, medium |
+| 6 | Video-Forge export | **done** | Sonnet, medium |
 
 ## Decisions (do not relitigate)
 
@@ -36,6 +36,13 @@ Agreed with the owner 17 Oct 2026. Free only: no paid services.
 
 ## 6. Video-Forge export (download button)
 
-- A .zip with `<name>.txt` (Video-Forge `Label: text` script lines) and `<name>.json` (its `BatchJob`).
+- A .zip with `<name>.txt` (Video-Forge's current format: DramaBox blocks, `A bright woman speaks evenly, "…"`; the `Name: text` format in its docs no longer parses) and `<name>.json` (its `BatchJob`).
 - The job copies cast/preset/format from one of the owner's own Video-Forge jobs, uploaded once in Settings; fills scriptPath, language, topic.
 - Tests check the script against Video-Forge's rules (`electron/tts/checkScript.ts`, `docs/WRITING-SCRIPTS.md` in DnD-World/Video-Forge).
+
+## As built
+
+- Interviewer: `interviewer.ts`, `src/Interviewer.tsx`. Off at every page load. Modes: Off / When I ask / After a pause (15–120 s of quiet, default 30; asks once, then waits for new words). Key **I** toggles. Panel in the Vault and in the session view.
+- Session log: `sessions.ts`, `vault/sessions/<sid>.md` every 10 s and when the session stops.
+- Story tab: `src/Story.tsx`, `lifebook.ts`. Map → `vault/life/map.md` (+ `map.json`), style → `vault/life/style.md`, chapters → `vault/book/<period>.md` (first person, cited, saved part by part, marked stale when an entry changes).
+- Export: `videoforge.ts`. Checked against Video-Forge's real `checkScript` and `parseDramaboxScript`. Stock footage is **off** by default for a personal story. The template job's `dramaboxWavDir`, `dramaboxWordsPath` and `dumpNarrationMeta` are never copied (they belong to its own script).
