@@ -94,7 +94,7 @@ export async function renderMap(m: LifeMap): Promise<string> {
   for (const p of m.periods) {
     const c = await coverage(p);
     out.push(`### ${p.name}${p.years ? ` (${p.years})` : ''} — ${c.thin ? '**thin**' : 'covered'}`);
-    out.push('', p.summary || '', '', `${p.entries.length} entries, ${c.words} words.`, '');
+    out.push('', p.summary || '', '', `${p.entries.length} ${p.entries.length === 1 ? 'entry' : 'entries'}, ${c.words} words.`, '');
   }
   if (m.people.length) out.push('## People', '', ...m.people.map(x => `- **${x.name}** — ${x.who}`), '');
   if (m.places.length) out.push('## Places', '', ...m.places.map(x => `- ${x}`), '');

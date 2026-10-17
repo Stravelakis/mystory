@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { StoryRoom } from './Story';
+import { useInterviewer, useSessionLog, InterviewerCard } from './Interviewer';
 import { putPiece, deletePiece, uploadPiece, flushPieces, finishRecording } from './pieceStore';
 import { createPortal } from 'react-dom';
 import {
@@ -303,7 +305,7 @@ function LockScreen({ onUnlocked }: { onUnlocked: () => void }) {
    APP
    ========================================================================== */
 
-type Tab = 'journal' | 'synthesis' | 'settings';
+type Tab = 'journal' | 'story' | 'synthesis' | 'settings';
 
 interface GoogleStatus {
   /** A refresh token is stored, so archiving will keep working indefinitely. */
@@ -324,7 +326,7 @@ export default function App() {
   // only ever reach by URL.
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     const t = new URLSearchParams(window.location.search).get('tab');
-    return t === 'synthesis' || t === 'settings' ? t : 'journal';
+    return t === 'synthesis' || t === 'settings' || t === 'story' ? t : 'journal';
   });
   const [google, setGoogle] = useState<GoogleStatus>({ connected: false, email: '', configured: false });
   const [gate, setGate] = useState<{ locked: boolean; authed: boolean } | null>(null);
@@ -415,6 +417,7 @@ export default function App() {
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'journal', label: 'Vault', icon: <Mic className="w-4 h-4" /> },
+    { id: 'story', label: 'Story', icon: <BookOpen className="w-4 h-4" /> },
     { id: 'synthesis', label: 'Synthesis', icon: <RefreshCw className="w-4 h-4" /> },
     { id: 'settings', label: 'Settings', icon: <Settings className="w-4 h-4" /> },
   ];
@@ -505,6 +508,7 @@ export default function App() {
               triggerAlert={triggerAlert}
             />
           )}
+          {activeTab === 'story' && <StoryRoom key="story" />}
           {activeTab === 'synthesis' && <SynthesisStudio key="synthesis" google={google} />}
           {activeTab === 'settings' && (
             <SettingsCenter
@@ -966,6 +970,7 @@ function MicLevel({ stream, onLevel }: { stream: MediaStream | null; onLevel?: (
 const VAULT_PANELS = {
   vault: 'The Vault',
   session: 'Session',
+  interviewer: 'Interviewer',
   entries: 'Entries',
   verbatim: 'Word for word',
   english: 'In English',
@@ -979,7 +984,7 @@ type VaultColumns = [PanelId[], PanelId[]];
 // sits at the top of the right column, level with the writing (asked for
 // 30 Sep 2026).
 const DEFAULT_VAULT_LAYOUT: VaultColumns = [
-  ['vault', 'session'],
+  ['vault', 'session', 'interviewer'],
   ['indicators', 'entries', 'verbatim', 'english', 'when'],
 ];
 const VAULT_LAYOUT_KEY = 'mystory.vaultLayout';
@@ -1274,6 +1279,15 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   // progress"). One at a time and in order; a failed send is retried, and if
   // the network is gone the whole recording still goes up at the end.
   const sidRef = useRef('');
+
+  // The interviewer is off until switched on, and only ever shows text.
+  const iv = useInterviewer({ active: isRecording, recording: isRecording && !paused, transcript, language, elapsed });
+  useSessionLog({ recording: isRecording, sid: sidRef.current, language, text: transcript, notes: iv.notes });
+  // A callback ref that never changes: the session view takes focus once, when
+  // it opens, and never again (an inline one stole it from the topic field on
+  // every re-render).
+  const focusOnOpen = useCallback((el: HTMLDivElement | null) => el?.focus(), []);
+
   const pieceChain = useRef<Promise<void>>(Promise.resolve());
   const pieceSeq = useRef(0);
   const sendPiece = (blob: Blob, mime: string) => {
@@ -2243,12 +2257,17 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
             aria-label="Session"
             tabIndex={-1}
             onKeyDown={e => {
+              const typing = (e.target as HTMLElement).closest('input, textarea, select');
+              if (typing) return;
               if (e.code === 'Space' && isRecording) {
                 e.preventDefault();
                 paused ? resumeRecording() : pauseRecording();
+              } else if (e.code === 'KeyI' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                e.preventDefault();
+                iv.toggle();
               }
             }}
-            ref={el => el?.focus()}
+            ref={focusOnOpen}
             style={{
               position: 'fixed',
               inset: 0,
@@ -2257,9 +2276,10 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
-              justifyContent: 'center',
+              justifyContent: 'safe center',
+              overflowY: 'auto',
               gap: 28,
-              padding: '24px 16px',
+              padding: '56px 16px 48px',
               outline: 'none',
             }}
           >
@@ -2348,6 +2368,7 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
                 {transcript.length > 600 ? '…' + transcript.slice(-600) : transcript}
               </p>
             )}
+            <InterviewerCard iv={iv} compact />
             {showWords && detectedIndicators.length > 0 && (
               <div
                 aria-live="polite"
@@ -2794,6 +2815,14 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
               {occurred.confidence && (
                 <p className="fhint" style={{ marginTop: 8 }}>{CONFIDENCE_NOTE[occurred.confidence]}</p>
               )}
+            </Frame>
+          ),
+          interviewer: (
+            <Frame title="Interviewer">
+              <p className="sec-note" style={{ marginBottom: 'var(--gap)' }}>
+                Questions appear here as text. Off until you switch it on; it never speaks over you.
+              </p>
+              <InterviewerCard iv={iv} />
             </Frame>
           ),
           indicators: (

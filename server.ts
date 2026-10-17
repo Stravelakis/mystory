@@ -560,7 +560,7 @@ async function startServer() {
     try {
       const template = await readTemplate();
       if (!template) {
-        return res.status(409).json({ success: false, error: 'Upload one of your Video-Forge job files first (Settings → Video-Forge). It carries your cast, voices and look.' });
+        return res.status(409).json({ success: false, error: 'Upload one of your Video-Forge job files first (Story → Video-Forge). It carries your cast, voices and look.' });
       }
       const kind = req.body?.kind;
       const id = String(req.body?.id || '');

@@ -65,6 +65,10 @@ Read this first. Everything after it is the permanent reference.
    LocalAI" applies to My Story only. The gitignored `.mcp.json` here is
    just forge wiring for making this project's brand art.
 
+### 17 Oct 2026: speech engine, interviewer, life book, Video-Forge
+
+See `PLAN.md` ("As built") and `engine/README.md`. New files: `engine/` (local Whisper), `livelocal.ts`, `jobs.ts`, `sessions.ts`, `interviewer.ts`, `lifebook.ts`, `videoforge.ts`, `src/Interviewer.tsx`, `src/Story.tsx`, `src/pieceStore.ts`. The local engine has not yet run on real speech; the first real run is the owner's.
+
 ### Voice work (30 Sep 2026)
 
 The owner reported that "it does not understand me", with every entry bad.
