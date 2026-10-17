@@ -101,6 +101,10 @@ import { loadWords, saveWords, wordsHint, keepIfPresent } from './words.ts';
 import { openLiveTranscription } from './live.ts';
 import { openLocalLiveTranscription } from './livelocal.ts';
 import { markJob, dropJob, listJobs, readJob, MAX_ATTEMPTS } from './jobs.ts';
+import { interview } from './interviewer.ts';
+import { saveSession, type SessionNote } from './sessions.ts';
+import { bookStatus, buildMap, learnStyle, draftPeriod, readChapterFile, readStyle, thinPeriods, isSlug, stripCitations } from './lifebook.ts';
+import { readTemplate, saveTemplate, buildExport, makeZip, fileSafe } from './videoforge.ts';
 import { loadScript, loadClips, appendScript, cleanScript, saveClip, readClip, wordErrorRate, sampleClips, peakDb, SILENT_DB, setAsideSilentClips, loadSets, createSet, updateSet, isSetId, loadMeasures, saveMeasure } from './voice.ts';
 import { planParts, openChapter, readChapter, savePart, listChapters, isChapterId } from './chapters.ts';
 import { timelineKey } from './vault.ts';
@@ -440,6 +444,158 @@ async function startServer() {
     const r = await processRecording(part.buffer, part.mime, req.body || {});
     if (r.json?.entryId) await dropPartial(req.params.sid).catch(() => {});
     res.status(r.status).json(r.json);
+  });
+
+
+  /* ---- interviewer ------------------------------------------------------
+     The server never asks a question by itself. These run only when the
+     interface sends a request: the writer pressed a button, or chose the
+     "after a pause" mode and has been quiet for as long as they set. */
+
+  app.post('/api/interviewer', async (req, res) => {
+    try {
+      const mode = req.body?.mode === 'suggest' ? 'suggest' : 'ask';
+      const config = await loadConfig();
+      const recent = Array.isArray(req.body?.recent) ? req.body.recent.slice(-8).map((q: unknown) => String(q).slice(0, 300)) : [];
+      const lines = await interview(config, {
+        mode,
+        transcript: String(req.body?.transcript || '').slice(-8000),
+        topic: String(req.body?.topic || '').slice(0, 300) || undefined,
+        language: req.body?.language === 'en' ? 'en' : 'el',
+        recent,
+        thin: mode === 'suggest' ? await thinPeriods().catch(() => []) : undefined,
+      });
+      res.json({ success: true, lines });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e?.message || String(e) });
+    }
+  });
+
+  /** The session's words and the interviewer's questions, as markdown, saved
+   *  every few seconds while it happens. */
+  app.put('/api/sessions/:sid', async (req, res) => {
+    if (!isValidSid(req.params.sid)) return res.status(400).json({ success: false, error: 'Not a session id.' });
+    try {
+      const notes: SessionNote[] = (Array.isArray(req.body?.notes) ? req.body.notes : [])
+        .slice(0, 500)
+        .map((n: any) => ({
+          at: Math.max(0, Number(n?.at) || 0),
+          kind: n?.kind === 'suggestion' ? 'suggestion' : n?.kind === 'topic' ? 'topic' : 'question',
+          text: String(n?.text || '').slice(0, 500),
+        }));
+      await saveSession(req.params.sid, {
+        started: String(req.body?.started || new Date().toISOString()).slice(0, 40),
+        language: String(req.body?.language || 'el').slice(0, 8),
+        text: String(req.body?.text || '').slice(0, 500_000),
+        notes,
+      });
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e?.message || String(e) });
+    }
+  });
+
+  /* ---- life map, style, book --------------------------------------------- */
+
+  app.get('/api/book', async (_req, res) => {
+    try {
+      res.json({ success: true, ...(await bookStatus()) });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e?.message || String(e) });
+    }
+  });
+
+  app.post('/api/book/map', async (_req, res) => {
+    try {
+      await buildMap(await loadConfig());
+      res.json({ success: true, ...(await bookStatus()) });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e?.message || String(e) });
+    }
+  });
+
+  app.post('/api/book/style', async (_req, res) => {
+    try {
+      await learnStyle(await loadConfig());
+      res.json({ success: true, style: await readStyle() });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e?.message || String(e) });
+    }
+  });
+
+  app.post('/api/book/draft', async (req, res) => {
+    if (!isSlug(req.body?.slug)) return res.status(400).json({ success: false, error: 'Not a period.' });
+    try {
+      const chapter = await draftPeriod(await loadConfig(), req.body.slug);
+      res.json({ success: true, chapter });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e?.message || String(e) });
+    }
+  });
+
+  app.get('/api/book/:slug', async (req, res) => {
+    const chapter = isSlug(req.params.slug) ? await readChapterFile(req.params.slug) : null;
+    if (!chapter) return res.status(404).json({ success: false, error: 'Not drafted yet.' });
+    res.json({ success: true, chapter });
+  });
+
+  /* ---- Video-Forge export ------------------------------------------------ */
+
+  app.get('/api/export/template', async (_req, res) => {
+    const t = await readTemplate();
+    res.json({ success: true, template: t ? { cast: t.cast.map(c => c.label), scriptPath: t.scriptPath || '' } : null });
+  });
+
+  app.put('/api/export/template', async (req, res) => {
+    try {
+      const t = await saveTemplate(req.body?.job);
+      res.json({ success: true, template: { cast: t.cast.map(c => c.label), scriptPath: t.scriptPath || '' } });
+    } catch (e: any) {
+      res.status(400).json({ success: false, error: e?.message || String(e) });
+    }
+  });
+
+  /** A zip with the script and the job for Video-Forge. Nothing is sent to it. */
+  app.post('/api/export/videoforge', async (req, res) => {
+    try {
+      const template = await readTemplate();
+      if (!template) {
+        return res.status(409).json({ success: false, error: 'Upload one of your Video-Forge job files first (Settings → Video-Forge). It carries your cast, voices and look.' });
+      }
+      const kind = req.body?.kind;
+      const id = String(req.body?.id || '');
+      let name = '';
+      let text = '';
+      if (kind === 'book') {
+        const c = isSlug(id) ? await readChapterFile(id) : null;
+        if (!c || !c.text) return res.status(404).json({ success: false, error: 'That chapter is not drafted yet.' });
+        name = c.title;
+        text = stripCitations(c.text);
+      } else if (kind === 'entry') {
+        if (!isValidId(id)) return res.status(400).json({ success: false, error: 'Not an entry.' });
+        const e = await readEntry(id);
+        name = e.title || 'entry';
+        text = e.text;
+      } else {
+        return res.status(400).json({ success: false, error: 'Choose a book chapter or an entry.' });
+      }
+      const out = buildExport(template, {
+        name,
+        text,
+        backgrounds: req.body?.backgrounds === 'auto' ? 'auto' : 'none',
+        speaker: Number.isInteger(req.body?.speaker) ? req.body.speaker : 0,
+      });
+      const zip = makeZip(out.files);
+      const base = fileSafe(name);
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', `attachment; filename="video-forge.zip"; filename*=UTF-8''${encodeURIComponent(base)}.zip`);
+      res.setHeader('X-Export-Warnings', encodeURIComponent(JSON.stringify(out.warnings)));
+      res.setHeader('X-Export-Blocks', String(out.blocks));
+      res.setHeader('Access-Control-Expose-Headers', 'X-Export-Warnings, X-Export-Blocks');
+      res.send(zip);
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e?.message || String(e) });
+    }
   });
 
   /** Everything after an upload arrives: the recording to disk first, then

@@ -71,6 +71,10 @@ export interface DraftOptions {
   focus?: string;
   /** Explain the named patterns as the chapter goes. This is the book mode. */
   explainTerms?: boolean;
+  /** Write as the person themselves ("I"), in their own voice, using this
+   *  style guide (vault/life/style.md). Without it the chapter is third-person
+   *  as before. */
+  firstPerson?: { style: string };
   model?: string;
   providerId?: string;
   /** Set when this draft is one part of a longer chapter (chapters.ts). */
@@ -112,7 +116,11 @@ ${partNote}
 Rules, all of them load-bearing:
 
 1. CITE EVERYTHING. After each sentence or short passage drawn from an entry, put its id in square brackets, like [20260816-142530-a3f]. Every factual claim needs one. Only use ids that appear below — never invent one.
-2. Their words win. Where they wrote a vivid phrase, quote it rather than paraphrasing. Do not upgrade their vocabulary or smooth their tone.
+2. Their words win. Where they wrote a vivid phrase, quote it rather than paraphrasing. Do not upgrade their vocabulary or smooth their tone.${
+  opts.firstPerson
+    ? `\n   WRITE AS THEM, in the first person ("I", or "εγώ"-less Greek the way they speak), as if they were telling it themselves. Same language as the entries. Follow this style guide, taken from how they actually talk:\n   ${opts.firstPerson.style.trim().replace(/\n/g, '\n   ')}`
+    : ''
+}
 3. Add nothing. No invented detail, no filled-in dialogue, no "she must have felt". If a connection between two entries is your inference, say so plainly in the text.
 4. Where an entry is not placed in time, do not invent when it was. Write around it.
 5. No diagnosis of anybody. Name behaviours and patterns, never what a person "is".
