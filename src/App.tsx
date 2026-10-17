@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { putPiece, deletePiece, uploadPiece, flushPieces, finishRecording } from './pieceStore';
 import { createPortal } from 'react-dom';
 import {
   Settings,
@@ -760,6 +761,7 @@ const LANGUAGES: PickerGroup[] = [
     options: [
       { value: 'el', label: 'Greek' },
       { value: 'en', label: 'English' },
+      { value: 'mix', label: 'Greek + English (mixed)' },
     ],
   },
 ];
@@ -856,6 +858,8 @@ const workletUrl = () =>
   pcmWorkletUrl || (pcmWorkletUrl = URL.createObjectURL(new Blob([PCM16K_WORKLET], { type: 'text/javascript' })));
 
 const LIVE_WORDS_KEY = 'mystory.liveWords';
+/** How often tags are looked for while speaking. */
+const TAG_EVERY_MS = 60_000;
 const LIVE_WORDS: PickerGroup[] = [
   {
     options: [
@@ -1237,12 +1241,13 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   };
   const [transcript, setTranscript] = useState('');
   const [sessionName, setSessionName] = useState('');
-  // Greek or English, never "detect": guessing the language wrong is the
-  // single easiest way to get a transcript that is nonsense throughout.
+  // Greek, English, or "mix" — never open-ended detection: guessing the
+  // language wrong is the single easiest way to get a transcript that is
+  // nonsense throughout. "mix" lets the engine choose between the two only.
   const [language, setLanguage] = useState<string>(() => {
     try {
       const saved = localStorage.getItem('mystory.language');
-      return saved === 'en' ? 'en' : 'el';
+      return saved === 'en' || saved === 'mix' ? saved : 'el';
     } catch {
       return 'el';
     }
@@ -1262,7 +1267,7 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   // 'listening' | 'reconnecting' | 'failed' | 'unavailable'
   const [liveState, setLiveState] = useState<string | null>(null);
   const [liveNote, setLiveNote] = useState('');
-  const liveRef = useRef<{ ws: WebSocket; ctx: AudioContext } | null>(null);
+  const liveRef = useRef<{ ws: WebSocket; ctx: AudioContext; stopping: boolean } | null>(null);
   const liveTextRef = useRef('');
 
   // Pieces of the recording, sent while it is being made (vault.ts, "in
@@ -1272,20 +1277,12 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   const pieceChain = useRef<Promise<void>>(Promise.resolve());
   const pieceSeq = useRef(0);
   const sendPiece = (blob: Blob, mime: string) => {
-    const sid = sidRef.current;
-    const seq = pieceSeq.current++;
+    const piece = { sid: sidRef.current, seq: pieceSeq.current++, mime, blob };
+    // Kept in the browser first; removed only once the server has it.
+    const stored = putPiece(piece).catch(() => {});
     pieceChain.current = pieceChain.current.then(async () => {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const r = await fetch(`/api/recordings/${sid}/piece?seq=${seq}&mime=${encodeURIComponent(mime)}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/octet-stream' },
-            body: blob,
-          });
-          if (r.ok || r.status === 409) return;
-        } catch {}
-        await new Promise(res => setTimeout(res, 1500 * (attempt + 1)));
-      }
+      await stored;
+      if ((await uploadPiece(piece)) !== 'later') await deletePiece(piece.sid, piece.seq).catch(() => {});
     });
   };
 
@@ -1293,11 +1290,18 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   const [interrupted, setInterrupted] = useState<{ sid: string; bytes: number; started: string; updated: string }[]>([]);
   const [recovering, setRecovering] = useState<string | null>(null);
   useEffect(() => {
-    void (async () => {
+    const check = async () => {
       try {
         const d = await (await fetch('/api/recordings/interrupted')).json();
         if (d.success) setInterrupted(d.recordings);
       } catch {}
+    };
+    void (async () => {
+      // Pieces an earlier visit could not send (a crash, a closed tab, the
+      // server down) go first; they show up as interrupted once they are in.
+      const sent = await flushPieces(sidRef.current);
+      await check();
+      if (sent) setTimeout(check, 95_000);
     })();
   }, []);
   const recover = async (sid: string) => {
@@ -1332,36 +1336,57 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
     liveTextRef.current = '';
     setLiveNote('');
     setLiveState('reconnecting');
-    const ws = new WebSocket(
-      `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/live?lang=${language === 'en' ? 'en' : 'el'}`,
-    );
-    ws.binaryType = 'arraybuffer';
+    const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/live?lang=${language === 'en' || language === 'mix' ? language : 'el'}`;
+    // Audio waiting for a socket: while connecting, and while reconnecting
+    // after a drop (server restart, Wi-Fi, Tailscale). About 75 s of it.
     const queue: ArrayBuffer[] = [];
-    ws.onopen = () => {
-      for (const b of queue.splice(0)) ws.send(b);
-    };
-    ws.onmessage = ev => {
-      let d: any;
-      try {
-        d = JSON.parse(String(ev.data));
-      } catch {
-        return;
-      }
-      if (d.type === 'text') {
-        const t = String(d.text || '').trim();
-        if (!t) return;
-        liveTextRef.current = liveTextRef.current ? `${liveTextRef.current} ${t}` : t;
-        setTranscript(liveTextRef.current);
-      } else if (d.type === 'state') {
-        setLiveState(d.state === 'open' ? 'listening' : d.state);
-      } else if (d.type === 'unavailable') {
-        setLiveState('unavailable');
-        setLiveNote(d.message || '');
-      }
-    };
-    ws.onerror = () => setLiveState(s => (s === 'unavailable' ? s : 'failed'));
+    const live: { ws: WebSocket; ctx: AudioContext; stopping: boolean } = { ws: null as any, ctx: new AudioContext(), stopping: false };
 
-    const ctx = new AudioContext();
+    const connect = (attempt: number) => {
+      const ws = new WebSocket(url);
+      ws.binaryType = 'arraybuffer';
+      live.ws = ws;
+      ws.onopen = () => {
+        for (const b of queue.splice(0)) ws.send(b);
+      };
+      ws.onmessage = ev => {
+        let d: any;
+        try {
+          d = JSON.parse(String(ev.data));
+        } catch {
+          return;
+        }
+        if (d.type === 'text') {
+          const t = String(d.text || '').trim();
+          if (!t) return;
+          liveTextRef.current = liveTextRef.current ? `${liveTextRef.current} ${t}` : t;
+          setTranscript(liveTextRef.current);
+        } else if (d.type === 'state') {
+          setLiveState(d.state === 'open' ? 'listening' : d.state);
+        } else if (d.type === 'unavailable') {
+          live.stopping = true; // nothing to reconnect to
+          setLiveState('unavailable');
+          setLiveNote(d.message || '');
+        } else if (d.type === 'done') {
+          try {
+            ws.close();
+          } catch {}
+          setLiveState(null);
+        }
+      };
+      ws.onclose = () => {
+        if (live.stopping || liveRef.current !== live) return;
+        // Words pause; the recording itself never depended on this socket.
+        setLiveState('reconnecting');
+        setTimeout(() => {
+          if (!live.stopping && liveRef.current === live) connect(attempt + 1);
+        }, Math.min(10_000, 1000 * 2 ** Math.min(attempt, 4)));
+      };
+    };
+    liveRef.current = live;
+    connect(0);
+
+    const ctx = live.ctx;
     try {
       await ctx.audioWorklet.addModule(workletUrl());
       const src = ctx.createMediaStreamSource(stream);
@@ -1371,8 +1396,9 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
       const node = new AudioWorkletNode(ctx, 'pcm16k');
       node.port.onmessage = e => {
         if (pausedRef.current) return;
-        if (ws.readyState === WebSocket.OPEN) ws.send(e.data);
-        else if (ws.readyState === WebSocket.CONNECTING && queue.length < 600) queue.push(e.data);
+        const ws = live.ws;
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(e.data);
+        else if (queue.length < 600) queue.push(e.data);
       };
       // A silent path to the speakers keeps the graph running; nothing is heard.
       const mute = ctx.createGain();
@@ -1387,23 +1413,24 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
       console.error('Live words could not start:', e);
       setLiveState('failed');
     }
-    liveRef.current = { ws, ctx };
   };
 
   const stopLive = () => {
     const l = liveRef.current;
     if (!l) return;
     liveRef.current = null;
-    // Ask for the end of the transcript, give it a moment, then let go.
+    l.stopping = true;
+    // Ask for the end of the transcript; the server answers "done" once the
+    // last piece is written out. A processor-only engine can take a while.
     try {
-      if (l.ws.readyState === WebSocket.OPEN) l.ws.send(JSON.stringify({ type: 'stop' }));
+      if (l.ws?.readyState === WebSocket.OPEN) l.ws.send(JSON.stringify({ type: 'stop' }));
     } catch {}
     setTimeout(() => {
       try {
-        l.ws.close();
+        l.ws?.close();
       } catch {}
       setLiveState(null);
-    }, 8000);
+    }, 30_000);
     void l.ctx.close().catch(() => {});
   };
   useEffect(() => writePref(MIC_KEY, micId), [micId]);
@@ -1768,14 +1795,20 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
     }
   };
 
-  // Debounced live tagging
+  // Live tagging. While recording, at most about once a minute: the words
+  // arrive a sentence at a time, and asking after every sentence would spend
+  // the free allowance for nothing (the next sentence changes the answer).
+  // A slow speaker sees tags appear with a delay, which is the point.
+  const lastTagAtRef = useRef(0);
   useEffect(() => {
     if (!transcript.trim() || transcript.length < 10) {
       setDetectedTags([]);
       setDetectedIndicators([]);
       return;
     }
+    const delay = isRecording ? Math.max(5000, TAG_EVERY_MS - (Date.now() - lastTagAtRef.current)) : 1500;
     const timer = setTimeout(async () => {
+      lastTagAtRef.current = Date.now();
       try {
         const res = await fetch('/api/journal/analyze-tags', {
           method: 'POST',
@@ -1788,9 +1821,9 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
       } catch (e) {
         console.error('Failed to fetch indicators:', e);
       }
-    }, 1500);
+    }, delay);
     return () => clearTimeout(timer);
-  }, [transcript]);
+  }, [transcript, isRecording]);
 
   // Companion socket, with reconnect — a silently dead socket used to leave both
   // companion keys doing nothing at all.
@@ -1958,7 +1991,10 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
           const data = await res!.json();
           // The server has already written the recording and an entry to hold
           // it, so adopt that id whether or not the transcription worked.
-          if (data.entryId) setEntryId(data.entryId);
+          if (data.entryId) {
+            setEntryId(data.entryId);
+            void finishRecording(sidRef.current);
+          }
           if (data.success && data.transcript) {
             setTranscript(data.transcript);
             setVerbatim(data.verbatim || '');
@@ -1977,7 +2013,14 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
           void refreshEntries();
         } catch (err: any) {
           console.error('Transcription error:', err);
-          triggerAlert('Transcription failed: ' + (err.message || err), 'error');
+          // Most often the server could not be reached at all. The pieces are
+          // kept in this browser and keep being sent; nothing is lost.
+          triggerAlert(
+            'Could not reach My Story to finish this recording (' +
+              (err.message || err) +
+              '). Your recording is kept in this browser and will be sent when the server is back — it then appears under "A recording was interrupted". Keep this tab open if you can.',
+            'error',
+          );
           void refreshEntries();
         }
       };
@@ -2303,6 +2346,30 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
                 }}
               >
                 {transcript.length > 600 ? '…' + transcript.slice(-600) : transcript}
+              </p>
+            )}
+            {showWords && detectedIndicators.length > 0 && (
+              <div
+                aria-live="polite"
+                style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'center', maxWidth: 820 }}
+              >
+                {detectedIndicators.map(i => (
+                  <motion.span
+                    key={i.label}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 1.2 }}
+                    className="tag"
+                    title={i.evidence ? `“${i.evidence}”` : undefined}
+                  >
+                    {i.label}
+                  </motion.span>
+                ))}
+              </div>
+            )}
+            {isRecording && (liveState === 'reconnecting' || liveState === 'failed') && liveWords === 'on' && (
+              <p className="fhint" style={{ margin: 0 }}>
+                Words paused for a moment. Your recording is safe and carries on.
               </p>
             )}
             <p className="fhint" style={{ position: 'absolute', bottom: 16, margin: 0 }}>
@@ -4659,12 +4726,22 @@ function SettingsCenter({
           </div>
 
           <div>
-            <p className="k" style={{ marginBottom: 6 }}>Local transcription</p>
+            <p className="k" style={{ marginBottom: 6 }}>Speech engine on the laptop</p>
+            <Field
+              label="Endpoint"
+              value={config.LOCAL_STT_GPU_BASE_URL || ''}
+              onChange={v => handleChange('LOCAL_STT_GPU_BASE_URL', v)}
+              placeholder="http://laptop.your-tailnet.ts.net:40666/v1"
+            />
+            <p className="fhint">
+              Tried first. When the laptop is off or its engine is paused, the one below takes over within seconds.
+            </p>
+            <p className="k" style={{ marginBottom: 6, marginTop: 12 }}>Local transcription (mini PC)</p>
             <Field
               label="Endpoint"
               value={config.LOCAL_STT_BASE_URL || ''}
               onChange={v => handleChange('LOCAL_STT_BASE_URL', v)}
-              placeholder="http://localhost:8000/v1"
+              placeholder="http://127.0.0.1:40667/v1"
             />
             <Field
               label="Model"

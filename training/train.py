@@ -184,15 +184,20 @@ def main() -> None:
     merged = model.merge_and_unload().half()
     after = wer(refs, transcribe(merged, processor, test_rows, device))
     print(f"\nBEFORE: {before:.1%}   AFTER: {after:.1%}   (words wrong on clips it never trained on)")
-    if after >= before * 0.9:
+    better = after < before * 0.9
+    if not better:
         print("Not a clear improvement. Keep using the current engine; more reading may help.")
 
     merged_dir = out / "merged"
     merged.save_pretrained(merged_dir)
     processor.save_pretrained(merged_dir)
-    (out / "result.json").write_text(json.dumps({"base": args.base, "before": before, "after": after}), encoding="utf-8")
+    (out / "result.json").write_text(
+        json.dumps({"base": args.base, "before": before, "after": after, "kept": better}), encoding="utf-8"
+    )
 
-    if not args.no_convert:
+    # The speech engine uses training/out/ct2 whenever it exists, so a model
+    # that did not clearly earn it is never put there.
+    if better and not args.no_convert:
         import subprocess
 
         subprocess.run(

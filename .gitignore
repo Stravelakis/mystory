@@ -36,3 +36,7 @@ docs/.astro/
 training/data/
 training/out/
 training/.venv/
+engine/.venv/
+engine/engine.log
+engine/settings.bat
+__pycache__/

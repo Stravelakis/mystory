@@ -1,0 +1,16 @@
+# The mini PC's speech engine, the always-on fallback for the laptop.
+# Installed by engine/linux/install.sh as a user service (no root).
+[Unit]
+Description=My Story speech engine (local Whisper)
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/mystory
+ExecStart=%h/mystory/engine/.venv/bin/python engine/stt_engine.py --device cpu --host 127.0.0.1 --port 40667
+Restart=always
+RestartSec=5
+# Leave the processor to My Story itself when both are busy.
+Nice=5
+
+[Install]
+WantedBy=default.target

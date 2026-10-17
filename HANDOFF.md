@@ -26,7 +26,8 @@ Read this first. Everything after it is the permanent reference.
 | Everyday work on Gemini **Live** models | text jobs: `gemini-live::gemini-3.8-live-extended-thinking`; transcription: `gemini-live::gemini-3.5-transcribe-live` |
 | Fallbacks | `gemini::gemini-3.5-flash-lite`, then `gemini::gemma-4-31b-it` (transcription falls to `gemini-3.5-transcribe`, then Groq Whisper) |
 | Free-tier privacy terms | **accepted** by the owner; do not keep raising it |
-| **No LocalAI**, no local model | the server has no `LOCAL_CHAT_*`; do not re-add one |
+| **No LocalAI**, no local *chat* model | the server has no `LOCAL_CHAT_*`; do not re-add one |
+| **Local speech engine: yes** (17 Oct 2026, reverses the above for transcription) | `engine/`: laptop GPU first, mini PC CPU second, then the cloud chain. See PLAN.md and engine/README.md |
 | **No Live Translate** | off unless `LIVE_TRANSLATE_MODEL` is set; translation goes straight to **DeepL** |
 | Tidied transcription by default | verbatim is always kept on disk beside it |
 | Port **38726** | picked with the repo-standards tool, recorded in its PORTS.md |

@@ -5,3 +5,7 @@
 *.png binary
 *.webm binary
 *.woff2 binary
+
+# Windows runs these; CRLF keeps cmd.exe from misreading labels and blocks.
+engine/**/*.bat text eol=crlf
+engine/**/*.ps1 text eol=crlf

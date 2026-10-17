@@ -39,6 +39,10 @@ export const CONFIG_KEYS = [
   'LOCAL_STT_BASE_URL',
   'LOCAL_STT_MODEL',
   'LOCAL_STT_API_KEY',
+  // The laptop's speech engine (engine/), tried before LOCAL_STT, which is
+  // the mini PC's always-on copy.
+  'LOCAL_STT_GPU_BASE_URL',
+  'LOCAL_STT_GPU_API_KEY',
   'OPENROUTER_API_KEY',
   'DEEPL_API_KEY',
   'OMNIROUTE_BASE_URL',
@@ -69,6 +73,7 @@ export const SECRET_KEYS = new Set<string>([
   'CEREBRAS_API_KEY',
   'LOCAL_CHAT_API_KEY',
   'LOCAL_STT_API_KEY',
+  'LOCAL_STT_GPU_API_KEY',
   'OPENROUTER_API_KEY',
   'DEEPL_API_KEY',
   'OMNIROUTE_API_KEY',
