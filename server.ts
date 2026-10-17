@@ -100,6 +100,7 @@ import { repair, checkUpdate } from './maintenance.ts';
 import { loadWords, saveWords, wordsHint, keepIfPresent } from './words.ts';
 import { openLiveTranscription } from './live.ts';
 import { openLocalLiveTranscription } from './livelocal.ts';
+import { markJob, dropJob, listJobs, readJob, MAX_ATTEMPTS } from './jobs.ts';
 import { loadScript, loadClips, appendScript, cleanScript, saveClip, readClip, wordErrorRate, sampleClips, peakDb, SILENT_DB, setAsideSilentClips, loadSets, createSet, updateSet, isSetId, loadMeasures, saveMeasure } from './voice.ts';
 import { planParts, openChapter, readChapter, savePart, listChapters, isChapterId } from './chapters.ts';
 import { timelineKey } from './vault.ts';
@@ -476,6 +477,22 @@ async function startServer() {
         }
       } catch {}
 
+      // From here on the work is marked, so a crash or restart resumes it.
+      await markJob(id, mime, body || {}).catch(e => console.warn('Could not mark the job:', e?.message || e));
+      return finishTranscription(id, buffer, mime, body);
+  }
+
+  /** Transcription, tidying and saving the words, for an entry whose
+   *  recording is already in the vault. Clears the job mark when the words
+   *  are saved (or when there is nothing more an automatic retry could do). */
+  async function finishTranscription(
+    id: string,
+    buffer: Buffer,
+    mime: string,
+    body: any,
+  ): Promise<{ status: number; json: any }> {
+    const reply = (status: number, json: any) => ({ status, json });
+    const audio = true;
       try {
         const config = await loadConfig();
         const words = await loadWords();
@@ -510,6 +527,7 @@ async function startServer() {
           }
         }
         const entry = await saveEntry({ id, text: transcript, verbatim });
+        await dropJob(id).catch(() => {});
         return reply(200, {
           success: true,
           transcript,
@@ -529,6 +547,8 @@ async function startServer() {
         if (liveText) {
           try {
             const entry = await saveEntry({ id, text: liveText });
+            // Words are in the entry; Transcribe again is the way to improve them.
+            await dropJob(id).catch(() => {});
             return reply(200, {
               success: true,
               transcript: liveText,
@@ -1907,9 +1927,37 @@ Ask a gentle, open-ended question or request in 1-2 sentences that helps them ex
     throw err;
   });
 
+  /** Transcriptions a crash or restart interrupted, run again one at a time.
+   *  An entry that already has words is left alone; one that failed too often
+   *  is left for Transcribe again rather than retried on every start. */
+  async function resumeJobs(): Promise<void> {
+    for (const job of await listJobs()) {
+      try {
+        if (job.attempts >= MAX_ATTEMPTS) {
+          console.warn(`[jobs] ${job.id} failed ${job.attempts} times; left for Transcribe again.`);
+          await dropJob(job.id);
+          continue;
+        }
+        const entry = await readEntry(job.id).catch(() => null);
+        const file = await findAudio(job.id);
+        if (!entry || !file || entry.text.trim()) {
+          await dropJob(job.id);
+          continue;
+        }
+        console.info(`[jobs] resuming the transcription of ${job.id}`);
+        await markJob(job.id, job.mime, job.options);
+        const r = await finishTranscription(job.id, await fs.readFile(file), job.mime, job.options);
+        console.info(`[jobs] ${job.id}: ${r.json?.success ? 'done' : r.json?.error}`);
+      } catch (e: any) {
+        console.warn(`[jobs] ${job.id}: ${e?.message || e}`);
+      }
+    }
+  }
+
   server.listen(PORT, HOST || undefined, async () => {
     console.log(`My Story running on http://localhost:${PORT}` + (HOST ? ` (bound to ${HOST})` : ''));
     console.log(`Vault: ${VAULT_DIR}`);
+    void resumeJobs();
     const boot = await loadConfig();
     const chain = await probe(boot);
     const usable = chain.filter(p => !p.error);

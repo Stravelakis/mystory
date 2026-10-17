@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { putPiece, deletePiece, uploadPiece, flushPieces, finishRecording } from './pieceStore';
 import { createPortal } from 'react-dom';
 import {
   Settings,
@@ -1276,20 +1277,12 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   const pieceChain = useRef<Promise<void>>(Promise.resolve());
   const pieceSeq = useRef(0);
   const sendPiece = (blob: Blob, mime: string) => {
-    const sid = sidRef.current;
-    const seq = pieceSeq.current++;
+    const piece = { sid: sidRef.current, seq: pieceSeq.current++, mime, blob };
+    // Kept in the browser first; removed only once the server has it.
+    const stored = putPiece(piece).catch(() => {});
     pieceChain.current = pieceChain.current.then(async () => {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const r = await fetch(`/api/recordings/${sid}/piece?seq=${seq}&mime=${encodeURIComponent(mime)}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/octet-stream' },
-            body: blob,
-          });
-          if (r.ok || r.status === 409) return;
-        } catch {}
-        await new Promise(res => setTimeout(res, 1500 * (attempt + 1)));
-      }
+      await stored;
+      if ((await uploadPiece(piece)) !== 'later') await deletePiece(piece.sid, piece.seq).catch(() => {});
     });
   };
 
@@ -1297,11 +1290,18 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
   const [interrupted, setInterrupted] = useState<{ sid: string; bytes: number; started: string; updated: string }[]>([]);
   const [recovering, setRecovering] = useState<string | null>(null);
   useEffect(() => {
-    void (async () => {
+    const check = async () => {
       try {
         const d = await (await fetch('/api/recordings/interrupted')).json();
         if (d.success) setInterrupted(d.recordings);
       } catch {}
+    };
+    void (async () => {
+      // Pieces an earlier visit could not send (a crash, a closed tab, the
+      // server down) go first; they show up as interrupted once they are in.
+      const sent = await flushPieces(sidRef.current);
+      await check();
+      if (sent) setTimeout(check, 95_000);
     })();
   }, []);
   const recover = async (sid: string) => {
@@ -1991,7 +1991,10 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
           const data = await res!.json();
           // The server has already written the recording and an entry to hold
           // it, so adopt that id whether or not the transcription worked.
-          if (data.entryId) setEntryId(data.entryId);
+          if (data.entryId) {
+            setEntryId(data.entryId);
+            void finishRecording(sidRef.current);
+          }
           if (data.success && data.transcript) {
             setTranscript(data.transcript);
             setVerbatim(data.verbatim || '');
@@ -2010,7 +2013,14 @@ function JournalRoom({ google, onLinkGoogle, triggerAlert }: JournalRoomProps) {
           void refreshEntries();
         } catch (err: any) {
           console.error('Transcription error:', err);
-          triggerAlert('Transcription failed: ' + (err.message || err), 'error');
+          // Most often the server could not be reached at all. The pieces are
+          // kept in this browser and keep being sent; nothing is lost.
+          triggerAlert(
+            'Could not reach My Story to finish this recording (' +
+              (err.message || err) +
+              '). Your recording is kept in this browser and will be sent when the server is back — it then appears under "A recording was interrupted". Keep this tab open if you can.',
+            'error',
+          );
           void refreshEntries();
         }
       };
