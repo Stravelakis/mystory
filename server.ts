@@ -23,7 +23,6 @@ import express from 'express';
 import path from 'path';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import { createServer as createViteServer } from 'vite';
 import fs from 'fs/promises';
 import dotenv from 'dotenv';
 import multer from 'multer';
@@ -232,7 +231,9 @@ async function startServer() {
     // The microphone starts streaming at once, while the engine is still being
     // chosen below. Hold those first seconds instead of dropping them.
     const early: [any, boolean][] = [];
-    let onMessage = (data: any, isBinary: boolean) => void early.push([data, isBinary]);
+    let onMessage: (data: any, isBinary: boolean) => void = (data, isBinary) => {
+      early.push([data, isBinary]);
+    };
     ws.on('message', (data, isBinary) => onMessage(data, isBinary));
     const handle = (fn: (data: any, isBinary: boolean) => void) => {
       onMessage = fn;
@@ -2041,6 +2042,10 @@ Ask a gentle, open-ended question or request in 1-2 sentences that helps them ex
   });
 
   if (process.env.NODE_ENV !== 'production') {
+    // Loaded only here: Vite is a development tool, and the installed app
+    // does not ship it (electron-builder 26 leaves it out), so a top-level
+    // import stopped the packaged app from starting at all.
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -2055,7 +2060,8 @@ Ask a gentle, open-ended question or request in 1-2 sentences that helps them ex
         ? __dirname
         : path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
+    // Express 5 names its wildcards; a bare '*' no longer starts the server.
+    app.get('/{*any}', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

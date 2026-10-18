@@ -124,7 +124,8 @@ export function useInterviewer(o: { active: boolean; recording: boolean; transcr
         const d = await r.json();
         if (!d.success) throw new Error(d.error || 'No answer.');
         // Switched off while the answer was on its way: stay silent.
-        if (modeRef.current === 'off') return;
+        // (The mode can change while awaiting, so read it fresh, untyped.)
+        if ((modeRef.current as string) === 'off') return;
         if (kind === 'ask') {
           const q = String(d.lines?.[0] || '');
           if (q) {
