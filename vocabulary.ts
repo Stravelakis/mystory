@@ -347,7 +347,7 @@ export async function loadTerms(): Promise<Term[]> {
       if (ok.length === 0) throw new Error('no usable terms');
       console.info(`[vocabulary] ${ok.length} terms from ${file}`);
       cache = ok;
-      return cache;
+      return ok;
     } catch (err: any) {
       console.warn(`[vocabulary] ${file} unusable (${err?.message || err}); using the built-in list.`);
     }

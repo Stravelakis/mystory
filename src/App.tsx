@@ -4788,7 +4788,7 @@ function SettingsCenter({
         <div style={{ marginTop: 'var(--gap)' }}>
           <div className="flex items-center justify-between" style={{ marginBottom: 6 }}>
             <p className="k">What answered last time it was asked</p>
-            <button className="btn btn-sm cut-sm" onClick={reloadProviders}>
+            <button className="btn btn-sm cut-sm" onClick={() => void reloadProviders()}>
               <span className="flex items-center gap-2">
                 <RefreshCw className="w-3 h-3" />
                 Recheck
