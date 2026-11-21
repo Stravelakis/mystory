@@ -1,3 +1,8 @@
+---
+checkedAgainst: v1.2.0
+checkedOn: 2026-11-21
+---
+
 ## Start here
 
 This page takes you from "I have never installed anything like this" to "I wrote my first entry and I know exactly where it is". Go slowly. Nothing here can break your computer, and every step says what you should see, so you always know whether it worked.
