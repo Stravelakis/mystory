@@ -31,6 +31,9 @@ release/
 
 # Docs site build output.
 docs/.astro/
+# Written by docs/scripts/sync-docs.mjs on every build.
+docs/src/docs/source/
+docs/src/data/
 
 # Voice training: your recordings and the trained model stay local.
 training/data/

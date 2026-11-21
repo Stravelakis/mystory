@@ -1,0 +1,243 @@
+# Jargon tooltips and ELI5 explainers for the My Story docs site (STANDARDS.md §7).
+# Hover, tap or keyboard-focus a dotted word to read it at your reading level.
+# explainer: true -> a "What's this?" box the first time it appears in the
+# English and ELI5 levels (never in Dev).
+
+vault:
+  explainer: true
+  eli5: The folder on your computer that holds all your entries. Think of it as a drawer that only you have the key to.
+  english: The folder where My Story keeps your entries as ordinary files, beside the app (from source) or in %APPDATA%\mystory (Windows app). Back it up by copying it.
+  dev: A directory of markdown files (VAULT_DIR, default ./vault) plus audio/, chapters/, voice/, words.md and .trash/. There is no database.
+
+self-hosted:
+  explainer: true
+  eli5: It runs on your own computer, not on a company's computer. Nobody else is looking after it, and nobody else can see inside.
+  english: You run the software yourself, on your own machine or server. There is no account and no company that holds your data.
+  dev: One Node process you run, with local storage and no vendor backend. The only outbound calls are the model providers and Google Drive you configure.
+
+passcode:
+  eli5: A secret word you choose that locks the app, like a PIN on a phone. Write it down, because nobody can recover it for you.
+  english: The one password that protects the app. It is stored only as a one-way hash, so it cannot be read back or recovered, but losing it does not lose your entries.
+  dev: One passcode, minimum four characters, stored as scrypt$salt$key in APP_PASSCODE_HASH. Sessions are stateless HMAC cookies.
+
+scrypt:
+  eli5: A way of scrambling your passcode so that the scrambled version cannot be turned back into the real word.
+  english: A password-hashing method. The app stores a scrambled form of your passcode and checks guesses against it.
+  dev: Memory-hard key derivation (crypto.scryptSync, 16-byte salt, 32-byte key, NFKC-normalised input, timingSafeEqual compare).
+
+API key:
+  explainer: true
+  eli5: A secret code from a company that proves it is you asking. Think of a library card. Whoever holds the card can borrow in your name, so you keep it private.
+  english: A long private code from a service such as Google or Groq. It lets My Story use that service for you. Anyone who has it can use your account, so keep it secret.
+  dev: A bearer credential sent to a provider. Stored in .env (mode 0600), masked on the way out through /api/config, and sent only to the provider it belongs to.
+
+model:
+  explainer: true
+  eli5: A program that has learned from a huge amount of text and can do jobs like turning speech into words or suggesting a title.
+  english: An AI model that does one of the app's six jobs: transcription, indicators, companion, when it happened, titles and synthesis.
+  dev: A provider-side model id, assigned per job as "<providerId>::<model>" in MODEL_<TASK>_1..3. Names are listed from the endpoint, never guessed.
+
+cloud:
+  eli5: Someone else's computers, far away. If a job runs there, your words travel to them.
+  english: Models run by a company in its data centre. Easier to start with, but your text goes to that company under its terms.
+  dev: Any provider with local: false. Reached only when routing allows it and CLOUD_CONSENT is yes.
+
+Local only:
+  explainer: true
+  eli5: A switch that says the cloud is never allowed. The app only uses programs on your own computer.
+  english: The strictest routing choice. Cloud model providers are not asked, even if a key is saved, and Google Drive is switched off.
+  dev: MODEL_ROUTING=local-only. chainFor() returns only local providers and middleware answers 409 on /api/google, /api/drive and /auth/callback. DeepL is checked against the consent box only.
+
+transcription:
+  eli5: Turning your voice into written words.
+  english: Speech to text. My Story saves the recording first, then asks a model for the words.
+  dev: The transcribe job. Providers expose stt models; Gemini Live uses inputTranscription, OpenAI-shaped servers use /audio/transcriptions.
+
+Whisper:
+  eli5: A well-known program that turns speech into words.
+  english: An open speech-recognition model from OpenAI. Local Whisper servers and Groq can run it for My Story.
+  dev: Whisper large-v3 family. The default local-stt model is Systran/faster-whisper-large-v3; Groq serves whisper-large-v3 and -turbo.
+
+Gemini:
+  eli5: Google's family of thinking programs. You need a Google key to use them.
+  english: Google's AI models. A free-tier key from Google AI Studio works, with daily limits. Your text goes to Google.
+  dev: Provider ids gemini (SDK, generateContent) and gemini-live (streaming Live API). Neither has hard-coded plain model names except the two Live defaults.
+
+Gemini Live:
+  eli5: A fast streaming way of talking to Google's models, used here for quick jobs and for words appearing as you speak.
+  english: Google's streaming audio-and-text interface. My Story uses it for everyday jobs and for the live words while you speak.
+  dev: A WebSocket protocol (bidiGenerateContent). Text jobs are spoken back and read from the transcript; ffmpeg converts audio to 16 kHz mono PCM16.
+
+DeepL:
+  eli5: A translating service that turns Greek into English without rewriting it.
+  english: A cloud translator. It is preferred to a language model because it renders what you said instead of smoothing it. Needs your consent tick.
+  dev: translate.ts tries DeepL first (host chosen by the :fx key suffix) and falls back to chat() with a translate prompt.
+
+Ollama:
+  eli5: A free program that runs thinking programs on your own computer.
+  english: A local model runner. Endpoint http://localhost:11434/v1. It has no transcription, so it needs a Whisper server beside it.
+  dev: OpenAI-compatible at :11434/v1. Configure as LOCAL_CHAT_BASE_URL; pair with a Whisper server for LOCAL_STT_BASE_URL.
+
+LocalAI:
+  eli5: Another free program that runs thinking programs on your own computer, including speech to text.
+  english: A local runner for chat and transcription from one endpoint (http://localhost:8080/v1), once a Whisper model is installed.
+  dev: OpenAI-compatible at :8080/v1. The same URL can serve LOCAL_CHAT_* and LOCAL_STT_*.
+
+OpenAI-compatible:
+  eli5: Many programs agree to talk in the same way. If one speaks this way, My Story can talk to it.
+  english: A standard request format that most model servers copy. It means a local model and a cloud model are set up the same way.
+  dev: POST {base}/v1/chat/completions, GET {base}/v1/models, /audio/transcriptions. One driver covers every provider of kind openai.
+
+endpoint:
+  eli5: The address of a program or service, like a street address for a program.
+  english: The web address My Story sends a request to, such as http://localhost:11434/v1.
+  dev: A base URL normalised to end in /v1 (normaliseBase).
+
+Load models:
+  eli5: A button that asks the company which models you can really use right now, so you never have to type one.
+  english: Asks every provider what models it has. It costs nothing and means you never type a model name from memory.
+  dev: probe(config, deep): plain GETs of the model listings (v1beta/models for Gemini, GET {base}/models for the rest).
+
+fallback:
+  eli5: A backup. If the first choice cannot do the job, the app tries the next one.
+  english: Each job has a first choice and two backups. The app tries them in order and tells you which one answered.
+  dev: slotsFor() returns up to three slots; chat() steps over every failure and throws the first one if all fail.
+
+indicator:
+  explainer: true
+  eli5: A name the app puts beside your words when they match a pattern, together with the exact words of yours it came from. It is a label, not a verdict.
+  english: A named pattern (such as gaslighting or fawn) found in your entry, shown with a plain definition and your own words as proof. If the model's quote is not in your entry, the name is dropped.
+  dev: A vocabulary term id plus the verbatim evidence, stored in the found front-matter line. normalise() drops a term whose quote is not found in the entry (case-insensitive, whitespace collapsed); a term with no quote is kept without evidence. Quotes are cut to 400 characters.
+
+gaslighting:
+  eli5: Someone making you doubt what really happened, for example by saying a thing never happened when it did.
+  english: Being persuaded that what you remember or feel is wrong. It sits under "Done to me" in the vocabulary.
+  dev: A term in the pattern category (Done to me) in vocabulary.ts, with a definition and aliases.
+
+DARVO:
+  eli5: When someone who hurt you denies it, attacks you for bringing it up, and acts like the victim.
+  english: Deny, Attack, Reverse Victim and Offender. A response pattern some people use when confronted. Listed under "Done to me".
+  dev: A term in the pattern category in vocabulary.ts.
+
+scapegoat:
+  eli5: The person in a family or group who is blamed for everything that goes wrong.
+  english: A position in a family system: the one cast as the cause of the trouble. It is a role you were put in, not something you did.
+  dev: A term in the role category (Position in the system).
+
+fawn:
+  eli5: Going quiet and agreeable to keep the peace and stay safe. It is something people do to get through, not a fault.
+  english: A survival response where you appease or please someone to reduce danger. Listed under "How I survived it".
+  dev: A term in the response category.
+
+gray rock:
+  eli5: Staying very dull and unreactive so a difficult person loses interest.
+  english: A coping tactic: giving short, flat, uninteresting answers to avoid feeding a conflict. Listed under "How I survived it".
+  dev: A term in the response category.
+
+hoovering:
+  eli5: Someone pulling you back in after you have tried to get away, like a vacuum cleaner.
+  english: Attempts to draw a person back into a relationship after they have pulled away. Listed under "Done to me".
+  dev: A term in the pattern category.
+
+episode:
+  explainer: true
+  eli5: A group of entries about one stretch of your life, drafted into a chapter.
+  english: Entries grouped by when they happened. A gap of more than about 120 days starts a new group. You can draft each into a chapter with citations.
+  dev: proposeEpisodes() with gapDays = 120; drafting is a chapter over a slice of the timeline (chapters.ts).
+
+synthesis:
+  eli5: Reading everything back and turning it into chapters.
+  english: The job and the tab that read your entries back and draft chapters, where the draft is asked to cite an entry after every claim; citations to entries outside the set are removed.
+  dev: The synthesis job (MAX_TOKENS 8000) over /api/episodes and /api/chapters; citations to entries outside the set are stripped and reported.
+
+markdown:
+  eli5: A very plain way of writing text with a few simple marks. Any text editor can open it.
+  english: A plain-text format. Your entries are .md files you can open in Notepad.
+  dev: Entries are markdown bodies with a YAML-like front-matter block; the English translation sits under "## In English".
+
+front matter:
+  eli5: A few lines at the top of a file that hold facts about it, like the date and title.
+  english: The block at the top of each entry file between two --- lines. It holds id, title, dates, when it happened, labels and links.
+  dev: id, title, created, updated, when, when_start, when_end, when_confidence, indicators, found (JSON), verbatim (JSON), audio, drive.
+
+Docker:
+  eli5: A way of running a program in a sealed box so it behaves the same everywhere.
+  english: A container tool. docker compose up -d runs My Story with the vault kept in a folder beside it.
+  dev: Two-stage Node 22 Alpine image; compose binds 127.0.0.1:38726 and bind-mounts ./vault and ./.env.
+
+Node.js:
+  eli5: The engine that My Story runs on. You install it once.
+  english: The JavaScript runtime My Story needs when you run it from source. Version 20 or newer.
+  dev: engines.node >=20. CI and the Docker image use Node 22.
+
+port:
+  explainer: true
+  eli5: A numbered door on your computer. The app listens at door 38726, and your browser knocks there.
+  english: A number after the address, like :38726. It tells your computer which program should answer.
+  dev: PORT, default 38726. HOST empty means dual-stack. A taken port exits with a plain-English message.
+
+localhost:
+  eli5: A name that means "this very computer".
+  english: An address that always points at the machine you are sitting at.
+  dev: Resolves to ::1 before 127.0.0.1 on Windows, which is why the server binds dual-stack by default.
+
+Tailscale:
+  explainer: true
+  eli5: A private network that links only your own devices, so your phone can reach your computer safely.
+  english: A free private network service. Installed on your computer and phone, it gives you an https address that works only for your own devices.
+  dev: tailscale serve --bg 38726 (or --https=38726). Never on 443 of a machine with Funnel on, because Funnel publishes to the internet.
+
+https:
+  eli5: The padlock version of a web address. Browsers only let a page use the microphone if the address is a padlock one or the computer itself.
+  english: The secure form of a web address. Phones will not give the microphone to a plain http address that is not the computer itself.
+  dev: getUserMedia requires a secure context, so recording from a phone needs https or localhost.
+
+Google Drive:
+  eli5: Google's online storage. My Story can copy an entry into your own Drive, but only if you link it and press archive.
+  english: Optional. When you link a Google account and archive an entry, a copy goes into your own Drive. Off under Local only.
+  dev: google.ts with scope drive.file (files this app created), a server-held refresh token, and routes closed by middleware under local-only.
+
+refresh token:
+  eli5: A long-lasting pass that lets the server ask Google for short passes by itself.
+  english: A credential the app's server keeps so your Google link survives restarts. The browser never receives it.
+  dev: GOOGLE_REFRESH_TOKEN in .env, access_type=offline. Access tokens are minted in memory.
+
+OAuth:
+  eli5: A way of letting one program use your account without giving it your password.
+  english: The standard sign-in handshake used to link your Google account.
+  dev: Server-side authorisation-code flow; redirect URI ending /auth/callback (https or localhost only).
+
+cookie:
+  eli5: A tiny note your browser keeps so the app remembers you unlocked it.
+  english: A small piece of data in your browser. My Story's session cookie lasts 30 days and survives restarts.
+  dev: mystory_session, HttpOnly, SameSite=Lax, Max-Age 30 days, Secure on https. A stateless HMAC token.
+
+WebSocket:
+  eli5: A phone line that stays open between your browser and the app, so words can arrive as you speak.
+  english: A live two-way connection. My Story uses one for the companion and one for words while you speak.
+  dev: /ws/journal and /ws/live (maxPayload 1 MiB, binary PCM16 in, transcript fragments out), upgraded in server.on('upgrade').
+
+ffmpeg:
+  eli5: A helper program that converts sound from one kind to another.
+  english: A free audio tool. The Live audio path needs it to convert recordings; without it the app falls back to the ordinary API.
+  dev: Spawned as ffmpeg -f s16le -ac 1 -ar 16000 to feed 16 kHz mono PCM16 to Gemini Live.
+
+Electron:
+  eli5: The tool that wraps a web app so it opens as a normal window on your computer.
+  english: The framework behind the Windows app. It runs the same server and shows it in a window.
+  dev: electron/main.cjs, CommonJS, requires dist/server.cjs in-process, sandboxed window, userData holds the vault and .env.
+
+SmartScreen:
+  eli5: The blue Windows warning that appears for programs from makers it does not know yet.
+  english: Windows' reputation check. The installer is not code-signed, so it asks; choose More info, then Run anyway.
+  dev: The NSIS installer is built with CSC_IDENTITY_AUTO_DISCOVERY=false, i.e. unsigned.
+
+LoRA:
+  eli5: A small add-on that teaches a speech program to understand your voice better.
+  english: A light way of fine-tuning a model. The training folder uses it to adapt Whisper to your recordings.
+  dev: training/ fine-tunes Whisper large-v3-turbo with LoRA (fits an 8 GB card) and serves the result on port 40666.
+
+NSIS:
+  eli5: The kind of installer that guides you through putting the app on your computer.
+  english: The standard Windows installer format used for My Story. It installs per user and lets you pick the folder.
+  dev: electron-builder nsis target: oneClick false, perMachine false, deleteAppDataOnUninstall false.
