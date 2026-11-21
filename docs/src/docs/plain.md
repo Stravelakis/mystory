@@ -1,3 +1,8 @@
+---
+checkedAgainst: v1.2.0
+checkedOn: 2026-11-21
+---
+
 ## What My Story is
 
 A journal that lives on **your own computer**. You talk or type; it keeps what you said in ordinary text files in a folder on your computer that you can open yourself (you can move it with the `VAULT_DIR` setting). Nobody hosts it for you, and there is nothing to sign up for.

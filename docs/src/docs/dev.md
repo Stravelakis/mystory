@@ -1,3 +1,8 @@
+---
+checkedAgainst: v1.2.0
+checkedOn: 2026-11-21
+---
+
 ## Orientation
 
 My Story is **one Node process**: an Express 5 server (`server.ts`, bundled to `dist/server.cjs` by esbuild) that serves a React 19 + Vite 8 client (`src/App.tsx`). TypeScript 7, Vitest 5, Electron 44 for the Windows shell. No database, no ORM, no state library. The product is a folder of **plain markdown files**; everything else (models, Google Drive, the interface) is replaceable around it.
