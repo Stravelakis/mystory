@@ -71,7 +71,7 @@ There is a box in Settings that says **I understand where my words go**. It star
 
 ### 10. Names for things that happened
 
-When what you write matches a pattern that people have a name for, like being told something never happened ("gaslighting"), the app can put that name beside your words, with a short plain explanation and **the exact sentence you wrote that it came from**. These names are not diagnoses and not verdicts. They are labels you can check against your own words. If the app cannot find the sentence to back a name up, it throws the name away.
+When what you write matches a pattern that people have a name for, like being told something never happened ("gaslighting"), the app can put that name beside your words, with a short plain explanation and **the exact words you wrote that it came from**. These names are not diagnoses and not verdicts. They are labels you can check against your own words. If the app is given words to back a name up and they are not in your entry, it throws the name away.
 
 > **In short** You talk or type. The app saves it as a file in a folder on your computer. It only asks a cloud company for help if you tick a box. Nothing is deleted. A passcode keeps other people out.
 
@@ -287,7 +287,7 @@ A model running on a computer without a graphics card is slow. Give small models
 <details>
 <summary>The app seems broken</summary>
 
-In **Settings**, find **Check and repair** and press **Check my files**. It checks that the program's own files are all there. It never touches your writing, because your vault and settings live in a separate folder.
+In **Settings**, find **Advanced** and press **Check my files**. It checks that the program's own files are all there. It never touches your writing, because your vault and settings live in a separate folder.
 
 </details>
 
@@ -314,7 +314,7 @@ If you are still stuck, tell the makers on [GitHub](https://github.com/Stravelak
 ## What next?
 
 - **Talk without the clutter:** on the **Vault** tab, **Start a session** gives you one button and a quiet screen. **Pause** whenever you need to, and **I'm done** to finish.
-- **Put your life in order:** on **Synthesis**, **Find my episodes** groups entries by when they happened, and **Draft this episode** writes a chapter where every sentence names the entry it came from.
+- **Put your life in order:** on **Synthesis**, **Find my episodes** groups entries by when they happened, and **Draft this episode** writes a chapter in which the app asks for each claim to name the entry it came from. A name for an entry that was not used is removed.
 - **Use it on your phone:** that needs one extra step called Tailscale. The **English** level explains it.
 - **Curious how it works inside?** Switch to **Dev** in the left menu.
 

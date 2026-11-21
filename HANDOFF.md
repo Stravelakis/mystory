@@ -16,6 +16,7 @@ The docs site (`docs/`, live at docs.stravelakis.com/mystory/) moved to the v2 d
   2. `INSTALL.md` step 3 shows the boot line as `My Story running on http://0.0.0.0:38726`; the code prints `http://localhost:38726`.
   3. `GUIDE.md` says "five jobs"; the code has six (`transcribe`, `when`, `indicators`, `companion`, `title`, `synthesis`).
   4. `electron/main.cjs` comment says `%APPDATA%\my-story`; the data folder is the package name (`%APPDATA%\mystory`, per README). Not checked on an installed copy.
+- **Not confirmed (left as written):** the glossary's `%APPDATA%\mystory` vault path (README says `mystory`; the comment at `electron/main.cjs:28` still says `my-story`; not checked on an installed copy); the ffmpeg-fallback wording ("falls back to the ordinary API"); the Tailscale lines (taken from DEPLOY.md, not run).
 - **Known gaps:** the Windows install and first-run steps in the ELI5 level are written from the code and the screenshots, not from a fresh installed run (microphone permission prompt not observed). Phone width and all three levels were checked in the built site; the stale GUIDE/INSTALL text is shown unedited in the Install and Guide sections.
 
 ---

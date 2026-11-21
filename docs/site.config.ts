@@ -19,7 +19,7 @@ export const siteConfig = {
   // npx electron scripts/social/render.cjs from the repo root.
   seoTitle: 'My Story: a private, self-hosted journal in Greek and English',
   socialImage: 'og-image.png',
-  socialImageAlt: 'My Story: an art-deco journal on a pedestal, with the tagline "A private journal on your own machine."',
+  socialImageAlt: 'My Story: a closed maroon book on a stepped pedestal, with gold and cream rays behind it, the title and the line "A private journal on your own machine."',
   locale: 'en_GB',
 
   // Left menu, top group. The "On this page" group below it is built from the

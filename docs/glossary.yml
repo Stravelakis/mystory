@@ -105,9 +105,9 @@ fallback:
 
 indicator:
   explainer: true
-  eli5: A name the app puts beside your words when they match a pattern, together with the exact sentence it came from. It is a label, not a verdict.
-  english: A named pattern (such as gaslighting or fawn) found in your entry, shown with a plain definition and your own quote as proof. If the quote cannot be found, the name is dropped.
-  dev: A vocabulary term id plus the verbatim evidence, stored in the found front-matter line. normalise() drops any term whose evidence is not an exact substring of the entry.
+  eli5: A name the app puts beside your words when they match a pattern, together with the exact words of yours it came from. It is a label, not a verdict.
+  english: A named pattern (such as gaslighting or fawn) found in your entry, shown with a plain definition and your own words as proof. If the model's quote is not in your entry, the name is dropped.
+  dev: A vocabulary term id plus the verbatim evidence, stored in the found front-matter line. normalise() drops a term whose quote is not found in the entry (case-insensitive, whitespace collapsed); a term with no quote is kept without evidence. Quotes are cut to 400 characters.
 
 gaslighting:
   eli5: Someone making you doubt what really happened, for example by saying a thing never happened when it did.
@@ -147,7 +147,7 @@ episode:
 
 synthesis:
   eli5: Reading everything back and turning it into chapters.
-  english: The job and the tab that read your entries back and draft chapters, where every claim names the entry it came from.
+  english: The job and the tab that read your entries back and draft chapters, where the draft is asked to cite an entry after every claim; citations to entries outside the set are removed.
   dev: The synthesis job (MAX_TOKENS 8000) over /api/episodes and /api/chapters; citations to entries outside the set are stripped and reported.
 
 markdown:

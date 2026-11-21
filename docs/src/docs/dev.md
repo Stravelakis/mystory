@@ -6,8 +6,8 @@ Rules that decide arguments, in order:
 
 1. **The recording survives everything.** Audio is written to disk before any model is called; the entry is written before anything goes to Drive.
 2. **Local-only is a guarantee, not a preference.** It is enforced in code at the router and again in middleware, not by a UI hint.
-3. **Nothing deletes.** Trash is a folder move; rewrites keep a copy.
-4. **No quote, no label.** An indicator whose evidence is not found verbatim in the entry is dropped.
+3. **Entries and recordings are never deleted.** Trash is a folder move and rewrites keep a copy. Only temporary partial-recording files are removed once the whole recording is saved, and a re-recorded voice clip replaces the old one when the file extension changes.
+4. **No quote, no label.** An indicator that comes with a quote not found in the entry is dropped. One given with no quote is kept, without evidence.
 
 > **Watch out** This page describes the code at tag **v1.2.0** (30 Sep 2026). `main` already holds about twenty later commits (a local speech engine, an interviewer, a Story tab, a Video-Forge export, recording sets, audio clean-up). They are not released, so they are not documented here. If this page and the code disagree, the code wins; the engineering map is [HANDOFF.md](https://github.com/Stravelakis/mystory/blob/HEAD/HANDOFF.md).
 
@@ -32,7 +32,7 @@ npm run gemini:doctor  # what a Google key can really reach
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PORT` | `38726` | Listen port. The boot error for a taken port suggests `PORT=38730`. |
+| `PORT` | `38726` | Listen port. Chosen to avoid 3000, 3001, 4000, 5000, 5173, 8000, 8080 and 9000, and the clash with Image Forge's dev server on 3000. The boot error for a taken port suggests `PORT=38730`. |
 | `HOST` | empty | Empty = dual-stack (IPv4 and IPv6). `localhost` resolves to `::1` first on Windows, so the old `0.0.0.0` default (IPv4 only) answered browsers but failed stricter clients. |
 | `VAULT_DIR` | `./vault` | Where entries live. |
 | `VAULT_KEEP_AUDIO` | on | `off` stops keeping recordings. |
@@ -45,7 +45,7 @@ npm run gemini:doctor  # what a Google key can really reach
 ## Layout
 
 ```
-src/App.tsx  --fetch /api-->  server.ts   (routes, one WebSocket pair)
+src/App.tsx  --fetch /api-->  server.ts   (routes + WebSockets, ~2,100 lines)
                                  |
    vault.ts  providers.ts  vocabulary.ts  episodes.ts  chapters.ts  translate.ts
    (disk)    (every model)  (35 terms)    (chapters)   (in parts)   (DeepL, model)
@@ -159,7 +159,7 @@ Base URLs are normalised to end in `/v1`. Model names are **never** guessed: `li
 | Where | What it does |
 |---|---|
 | `chainFor()` | `local-only` returns only providers with `local: true` |
-| `chat()`, transcription, `transcriptionCandidates()` | every list is filtered `p.local || CLOUD_CONSENT === 'yes'`; with no consent and no local provider the call throws the "Cloud AI is not switched on yet" message |
+| `chat()` and the transcription chain (`transcriptionCandidates()`) | the provider chain is filtered `p.local || CLOUD_CONSENT === 'yes'`, so cloud providers are not tried without consent; with no consent and no local provider the call throws the "Cloud AI is not switched on yet" message. DeepL is in no chain: see the note below |
 | `POST /api/journal/translate` | refuses with that message unless `CLOUD_CONSENT` is `yes` |
 | `/ws/live` | closes with `unavailable` if routing is local-only **or** consent is missing |
 | `/api/google`, `/api/drive`, `/auth/callback` | middleware answers **409** while routing is local-only |
@@ -180,9 +180,9 @@ Everyday jobs go to Gemini's streaming Live API first. None of it behaves like t
 
 ## Indicators, episodes, chapters
 
-`vocabulary.ts` holds 35 terms in four categories (`pattern` 15 "Done to me", `role` 6 "Position in the system", `response` 7 "How I survived it", `protection` 7 "What protected me"). The category is a design decision: filing something done *to* you and something you did to *survive* under one heading turns a coping response into a fault. `normalise()` requires the model's `evidence` to be an exact, whitespace-normalised substring of the entry; a term whose quote is not found is **dropped entirely**, not kept without the quote. `buildPrompt()` is generated from the loaded vocabulary, so replacing it (`INDICATORS_FILE`) replaces the prompt.
+`vocabulary.ts` holds 35 terms in four categories (`pattern` 15 "Done to me", `role` 6 "Position in the system", `response` 7 "How I survived it", `protection` 7 "What protected me"). The category is a design decision: filing something done *to* you and something you did to *survive* under one heading turns a coping response into a fault. `normalise()` checks a quote when the model gives one: case-insensitive, whitespace collapsed, and it must be found in the entry, or the term is **dropped entirely**; a found quote is cut to 400 characters. A term given with **no** quote at all is kept, without evidence. `buildPrompt()` is generated from the loaded vocabulary, so replacing it (`INDICATORS_FILE`) replaces the prompt.
 
-`episodes.ts` proposes episodes by a deliberately blunt rule: entries on the timeline with a gap of more than `gapDays` (default 120) start a new one. Drafting renders each entry with its date, named terms and quotes; the draft is told to mark each claim with an entry id, and a citation that names an entry that was not in the set is stripped and **reported**, not hidden. `chapters.ts` drafts in parts that fit a token budget, saves each part as it lands to `vault/chapters/<id>.md`, and resumes where it stopped. The chapter id is a SHA-1 of the sorted entry ids, so the same set is the same chapter.
+`episodes.ts` proposes episodes by a deliberately blunt rule: entries on the timeline with a gap of more than `gapDays` (default 120) start a new one. Drafting renders each entry with its date, named terms and quotes; the draft is asked to cite an entry id after every claim, and a citation to an entry that was not in the set is stripped and **reported**, not hidden. The code does not check that every sentence carries a citation. `chapters.ts` drafts in parts that fit a token budget, saves each part as it lands to `vault/chapters/<id>.md`, and resumes where it stopped. The chapter id is a SHA-1 of the sorted entry ids, so the same set is the same chapter.
 
 ## Google Drive
 

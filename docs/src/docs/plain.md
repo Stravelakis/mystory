@@ -1,13 +1,13 @@
 ## What My Story is
 
-A journal that lives on **your own computer**. You talk or type; it keeps what you said in ordinary text files in a folder you can open yourself. Nobody hosts it for you, and there is nothing to sign up for.
+A journal that lives on **your own computer**. You talk or type; it keeps what you said in ordinary text files in a folder on your computer that you can open yourself (you can move it with the `VAULT_DIR` setting). Nobody hosts it for you, and there is nothing to sign up for.
 
 On top of that it can do four things, only when you let it:
 
 - **Write down what you say.** Press Record and speak in Greek or English.
 - **Translate beside the original.** A Greek entry gets an English version under it. The original is never changed.
 - **Put things in order.** Entries carry *when the thing happened*, in your own words ("the summer before I left school"), not just when you typed them.
-- **Name what happened.** When your words match a pattern that has a name (gaslighting, scapegoat, fawn, gray rock and others), it puts the name beside your words, with the exact sentence it came from. A name it cannot quote you for is dropped.
+- **Name what happened.** When your words match a pattern that has a name (gaslighting, scapegoat, fawn, gray rock and others), it puts the name beside your words, with the exact words of yours it came from (a quote of up to 400 characters). If the model offers a quote that is not in your entry, the name is dropped.
 
 > **Watch out** This is a journal, not a clinician. It names behaviours; it does not diagnose anyone, it never speaks unless you press a button that asks it to, and it is not a substitute for a person. If you are in crisis, please reach one.
 
@@ -41,7 +41,7 @@ Open <http://localhost:38726>. To stop, press Ctrl+C in the terminal. On Windows
 ## Set up the lock and the models
 
 1. **The lock.** Type a passcode of at least four characters and press **Set passcode**. Until you do, anyone who can reach the app's port can read every entry, and the app tells you so. The passcode is stored only as a one-way scrypt hash, so it cannot be recovered. **Write it down.** Five wrong guesses from one address buy a minute of silence.
-2. **Where your words go.** Tick **I understand where my words go** only if you want cloud AI. Until it is ticked, no entry text is sent to any cloud provider (DeepL included) and only models on your own machine are asked.
+2. **Where your words go.** Tick **I understand where my words go** only if you want cloud AI. Until it is ticked, no entry text is sent to any cloud AI provider (DeepL included) and only models on your own machine are asked.
 3. **Models → Where models run.** Three choices: **Cloud first**, **Local first**, **Local only**.
 4. Paste a key under **Provider keys** (a free Google Gemini key from AI Studio, or Groq, Mistral, NVIDIA, Cerebras, OpenRouter, or any endpoint that speaks the OpenAI format) or point **Local models** at a runtime on your machine. Press **Load models**. The app asks every provider what it really has, which costs nothing, so you never type a model name from memory.
 5. **Which model does which job.** Six jobs: **Transcription**, **Indicators**, **Companion**, **When it happened**, **Titles**, **Synthesis**. Each takes a first choice and two fallbacks. If the first is out of quota or switched off, the second is tried, then the third, and the app tells you which one answered. Press **Try it** on a job to test it, then **Save all**.
@@ -106,11 +106,11 @@ Four groups, kept apart on purpose:
 | **How I survived it** | what *you* did to get through | fawn, gray rock, freeze, hypervigilance |
 | **What protected me** | what worked | a boundary held, no contact, a witness |
 
-Gaslighting is something done to you; fawn is something you did to survive it. One list would make the second look like a fault. It is not. If the app cannot find the exact sentence that justifies a name, it drops the name. You can replace the whole list: point `INDICATORS_FILE` at a JSON file of your own terms.
+Gaslighting is something done to you; fawn is something you did to survive it. One list would make the second look like a fault. It is not. If a name comes with a quote that is not in your entry, the app drops the name. A name given with no quote at all is kept, without evidence. You can replace the whole list: point `INDICATORS_FILE` at a JSON file of your own terms.
 
 ## Episodes and chapters
 
-**Synthesis** reads your entries back. **Find my episodes** groups entries by when they happened (a gap of more than about four months starts a new group). **Draft this episode** writes a chapter where every claim names the entry it came from, and a citation to an entry that was not in the set is removed and reported. Long chapters are drafted in parts, each saved as it finishes, so a failure costs one part, never the rest.
+**Synthesis** reads your entries back. **Find my episodes** groups entries by when they happened (a gap of more than about four months starts a new group). **Draft this episode** writes a chapter. The draft is asked to cite an entry after every claim, and any citation to an entry that was not in the set is removed and reported. The app does not check that every sentence has one. Long chapters are drafted in parts, each saved as it finishes, so a failure costs one part, never the rest.
 
 ## Where your words go
 
@@ -120,7 +120,7 @@ Plainly, from the code:
 - **Local only** closes the cloud model providers, even with a key sitting in the settings, and switches **Google Drive** off.
 - **Google Drive** is optional and off by default. Nothing is uploaded until you archive an entry. The app holds a refresh token and asks only for access to files it creates (`drive.file`); the browser never receives a Google credential.
 - Keys are stored in the settings file (`.env`) and sent only to the provider they belong to. The Settings screen can set a key but never read it back.
-- **Check for an update** asks GitHub for the latest release when you press it. It sends no entry text and installs nothing by itself.
+- **Settings → Advanced** has two buttons. **Check my files** only confirms that the program's own files are present and not empty. **Check for an update** only asks GitHub for the latest release and shows an **Open the release** link: it sends no entry text and installs nothing. Neither touches your entries. **Test** and **Load models** contact a provider with only your key, no entry text.
 
 > **Watch out** One gap in version 1.2.0: if you tick the consent box, add a DeepL key **and** set Local only, translation still goes to DeepL, because DeepL is checked against the consent box only. For the strictest setup, leave the consent box unticked.
 
@@ -147,7 +147,7 @@ That address works only for your own devices. [DEPLOY.md](https://github.com/Str
 - **Forgot the passcode.** Open the `.env` settings file, delete the line starting `APP_PASSCODE_HASH=`, save, restart. Your entries are untouched.
 - **A local model finds no indicators.** It is the hardest job. The app says whether the model ran out of room or returned only its thinking. A non-reasoning model usually does better.
 - **Everything is slow.** A local model without a graphics card is slow. Give small models to Indicators and Titles and keep the big one for Synthesis.
-- **The app seems broken.** **Settings → Check and repair → Check my files** checks the program's own files. It never touches your writing.
+- **The app seems broken.** **Settings → Advanced → Check my files** confirms the program's own files are present and not empty. It never touches your writing.
 
 Still stuck? Open an issue at [github.com/Stravelakis/mystory/issues](https://github.com/Stravelakis/mystory/issues) and paste what the terminal printed.
 
