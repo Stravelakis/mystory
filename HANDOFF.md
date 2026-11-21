@@ -4,6 +4,22 @@ Everything a fresh session needs. Updated 25 Sep 2026 (v1.0.0).
 
 ---
 
+## Docs site: v2 theme and three rewritten levels — 21 Nov 2026
+
+The docs site (`docs/`, live at docs.stravelakis.com/mystory/) moved to the v2 docs theme (hub fonts, drifting dots, level cards, per-level "On this page" menu, glossary underlines) and its Dev, English and ELI5 pages were rewritten from the code at **tag v1.2.0**. Glossary: `docs/glossary.yml` (46 terms). Pages show "Not reviewed yet": nobody has ticked the checklist or set `checkedAgainst` / `checkedOn`.
+
+- **Theme files** (`docs/src/layouts`, `components`, `scripts`, `styles/theme.css`, `scripts/sync-docs.mjs`, `package.json`) are copies of the master docs-theme; replace them from there, do not edit. Own files: `site.config.ts`, `astro.config.mjs`, `public/`, `src/pages/index.astro`, `src/docs/*.md`, `glossary.yml`.
+- **sync-docs**: reads `GUIDE.md` and `INSTALL.md` from the repo root (`..`). Local fix: its image-path pattern also maps `docs/public/...` (the theme folder is `docs/` here). Reported to the owner so the master can take it. `docs/src/docs/source/` and `docs/src/data/` are generated and git-ignored.
+- **Not documented because not released** (on `main`, after v1.2.0): the local speech engine (`engine/`), interviewer, Story tab, life book, Video-Forge export, recording sets, mic test, audio clean-up (`AUDIO_CLEANUP`), mixed Greek+English language. Write them into the three levels when the next tag is cut, then re-check every fact.
+- **Found while checking, not fixed (out of scope):**
+  1. DeepL is gated by the consent box only. With consent ticked, a DeepL key set and **Local only** on, translation still goes to DeepL (`translate.ts`, route `/api/journal/translate`). README and GUIDE promise Local only stops cloud calls. Fix: refuse in the route when `isLocalOnly(config)`. The docs say this plainly until then.
+  2. `INSTALL.md` step 3 shows the boot line as `My Story running on http://0.0.0.0:38726`; the code prints `http://localhost:38726`.
+  3. `GUIDE.md` says "five jobs"; the code has six (`transcribe`, `when`, `indicators`, `companion`, `title`, `synthesis`).
+  4. `electron/main.cjs` comment says `%APPDATA%\my-story`; the data folder is the package name (`%APPDATA%\mystory`, per README). Not checked on an installed copy.
+- **Known gaps:** the Windows install and first-run steps in the ELI5 level are written from the code and the screenshots, not from a fresh installed run (microphone permission prompt not observed). Phone width and all three levels were checked in the built site; the stale GUIDE/INSTALL text is shown unedited in the Install and Guide sections.
+
+---
+
 ## 0. Where things stand — 25 Sep 2026
 
 Read this first. Everything after it is the permanent reference.

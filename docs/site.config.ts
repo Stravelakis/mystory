@@ -1,5 +1,3 @@
-import type { DotFieldOptions } from './src/scripts/dot-field';
-
 // Per-repo config. Most projects only touch this file and src/docs/*.md.
 
 interface SocialLink {
@@ -24,14 +22,31 @@ export const siteConfig = {
   socialImageAlt: 'My Story: an art-deco journal on a pedestal, with the tagline "A private journal on your own machine."',
   locale: 'en_GB',
 
-  // Sidebar menu. Each id must match an element id on the page.
+  // Left menu, top group. The "On this page" group below it is built from the
+  // headings of the reading level on screen.
   nav: [
     { id: 'top', label: 'Overview' },
-    { id: 'features', label: 'Features' },
-    { id: 'showcase', label: 'Showcase' },
-    { id: 'docs', label: 'Docs' },
-    { id: 'walkthrough', label: 'Walkthrough' },
+    { id: 'features', label: 'What it does' },
+    { id: 'showcase', label: 'Screenshots' },
   ],
+
+  // Buttons and chips in the hero.
+  heroLinks: [
+    { label: 'Download for Windows', href: 'https://github.com/Stravelakis/mystory/releases/latest', primary: true },
+    { label: 'Source on GitHub', href: 'https://github.com/Stravelakis/mystory' },
+    { label: 'What changed', href: 'https://github.com/Stravelakis/mystory/blob/HEAD/CHANGELOG.md' },
+  ],
+  heroPills: ['Plain files you own', 'No account', 'Greek and English', 'Local-only mode'],
+
+  // The three cards under the hero. They switch the reading level.
+  levelCards: [
+    { id: 'dev', tag: 'Dev', title: 'How it is built', text: 'Architecture, the vault format, the model router, the consent gates, build, test and release.' },
+    { id: 'plain', tag: 'English', title: 'How to use it', text: 'For people comfortable with tech who do not write code. Install, daily use, privacy, fixes.' },
+    { id: 'eli5', tag: 'ELI5', title: 'Start from zero', text: 'Slow, calm and complete. Every word explained, every click spelled out, with what you should see.' },
+  ],
+
+  // First visit lands on English; a reader's saved choice still wins.
+  defaultVernacular: 'plain',
 
   // Reading-level switch at the top of the sidebar. The ids are fixed (they
   // match src/docs/dev.md, plain.md, eli5.md); change labels only.
@@ -54,31 +69,4 @@ export const siteConfig = {
       { kind: 'linkedin', label: 'LinkedIn', href: 'https://www.linkedin.com/in/stravelakiscom/' },
     ] as SocialLink[],
   },
-
-  // React Bits "Dot Field" settings, same names as on reactbits.dev.
-  backgrounds: {
-    page: {
-      cursorRadius: 200,
-      bulgeStrength: 6,
-      cursorForce: 0,
-      dotRadius: 2,
-      dotSpacing: 5,
-      glowRadius: 50,
-      sparkle: true,
-      gradientFrom: '#0001c6',
-      gradientTo: '#00cade',
-      glowColor: '#040410',
-    },
-    sidebar: {
-      cursorRadius: 100,
-      bulgeStrength: 0,
-      cursorForce: 0,
-      bulgeOnly: false,
-      dotSpacing: 5,
-      glowRadius: 50,
-      gradientFrom: '#0001c6',
-      gradientTo: '#00cade',
-      glowColor: '#040410',
-    },
-  } satisfies Record<string, DotFieldOptions>,
 };
