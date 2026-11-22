@@ -16,7 +16,7 @@
       which the interface says out loud.
    ========================================================================== */
 
-import { chat } from './providers.ts';
+import { chat, isLocalOnly } from './providers.ts';
 
 export type Engine = 'deepl' | 'model';
 
@@ -109,7 +109,9 @@ export async function translate(
 ): Promise<TranslationResult> {
   const key = (config.DEEPL_API_KEY || '').trim();
 
-  if (key) {
+  // DeepL is a cloud service: local-only routing must keep it out, even when a
+  // key is saved and cloud consent is given.
+  if (key && !isLocalOnly(config)) {
     try {
       return await viaDeepL(key, text, target);
     } catch (err: any) {

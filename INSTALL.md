@@ -47,7 +47,7 @@ The first line takes a minute or two — it is fetching the parts. The second on
 starts the app and prints something like:
 
 ```
-My Story running on http://0.0.0.0:38726
+My Story running on http://localhost:38726
 Vault: /home/you/mystory/vault
 Models: cloud-first — none configured
 ```

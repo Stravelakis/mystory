@@ -138,7 +138,8 @@ Set it to **Local only** and the app will not contact any cloud company at all
 switches Google Drive off. That is a promise the code keeps, not a preference
 it tries to honour.
 
-Each of the five jobs (transcribing, naming patterns, the companion, titles,
+Each of the six jobs (transcribing, naming patterns, the companion, working out
+when it happened, titles,
 chapter drafting) can be given its own model, plus **two backups** in case the
 first is out of quota. Cheap and fast for the constant jobs; save the big slow
 one for drafting chapters.

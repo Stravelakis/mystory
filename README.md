@@ -446,7 +446,7 @@ Do this in order, and tell me what you see at each step:
    each provider: its name, whether it answered, and how many models it found.
    Quote any error exactly rather than summarising it.
 
-6. In "Which model does which job", tell me what each of the five jobs is set
+6. In "Which model does which job", tell me what each of the six jobs is set
    to. If a job has no first choice, tell me what the dropdown offers and let
    ME pick. Do not choose a model on my behalf: they differ in cost, speed and
    whether they run on my own machine.
